@@ -419,13 +419,16 @@ with st.sidebar:
                 st.success("line_user_id ✅")
                 if st.button("📤 發送測試訊息", use_container_width=True):
                     try:
-                        _req.post(
+                        r = _req.post(
                             "https://api.line.me/v2/bot/message/push",
                             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                             json={"to": user_id, "messages": [{"type": "text", "text": "【測試】LINE 通知設定成功 ✅"}]},
                             timeout=10,
                         )
-                        st.success("已發送！檢查你的 LINE")
+                        if r.status_code == 200:
+                            st.success("已發送！檢查你的 LINE")
+                        else:
+                            st.error(f"LINE 錯誤 {r.status_code}：{r.text}")
                     except Exception as e:
                         st.error(f"發送失敗：{e}")
     else:
