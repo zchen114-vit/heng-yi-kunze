@@ -203,18 +203,30 @@ def _enrich(sessions):
         })
     return result
 
-def create_session(name: str, category: str) -> str:
+def create_session(name: str, category: str, phone: str = "") -> str:
     sid = str(uuid.uuid4())[:8].upper()
     try:
         _post("sessions", {
             "session_id": sid,
             "customer_name": name,
             "category": category,
-            "preference": "",
+            "preference": phone,
         })
     except Exception as e:
         st.error(f"建立諮詢失敗：{e}")
     return sid
+
+def get_session_by_phone(phone: str):
+    try:
+        data = _get("sessions", {
+            "preference": f"eq.{phone}",
+            "is_closed": "eq.false",
+            "order": "created_at.desc",
+            "limit": "1",
+        })
+        return data[0] if data else None
+    except Exception:
+        return None
 
 def get_session(sid: str):
     try:
@@ -453,7 +465,6 @@ with st.sidebar:
                 st.markdown(f"**目前分區：** {icon} {sess['category']}")
                 st.markdown("**您的諮詢編號：**")
                 st.markdown(f'<div class="sid-box">{sid}</div>', unsafe_allow_html=True)
-                st.caption("請保存此編號，可隨時返回查閱")
             if st.button("← 回到首頁", use_container_width=True):
                 st.session_state.page = "home"
                 st.session_state.customer_sid = None
@@ -471,9 +482,9 @@ with st.sidebar:
         st.markdown("""<small>
 <b>使用說明</b><br>
 ① 選擇諮詢分區<br>
-② 填寫姓名與問題<br>
-③ 靜候顧問解讀回覆<br><br>
-請保存諮詢編號以便日後查閱。
+② 填寫姓名、手機號與問題<br>
+③ 靜候小老師解讀回覆<br><br>
+留下手機號可隨時回來查詢記錄。
 </small>""", unsafe_allow_html=True)
 
         st.markdown("---")
@@ -513,20 +524,20 @@ if (sid) {
 　選擇分區後填寫姓名與問題，靜候小老師為您解卦。
 </div>""", unsafe_allow_html=True)
 
-    with st.expander("🔍 查詢舊記錄"):
-        lookup_sid = st.text_input("輸入諮詢編號", placeholder="例如：A1B2C3D4", label_visibility="collapsed")
-        if st.button("查詢", use_container_width=True):
-            sid_clean = lookup_sid.upper().strip()
-            if sid_clean:
-                sess = get_session(sid_clean)
-                if sess and not sess["is_closed"]:
-                    st.session_state.customer_sid = sid_clean
+    with st.expander("📱 查詢我的諮詢記錄"):
+        lookup_phone = st.text_input("輸入當時留下的手機號碼", placeholder="例如：0912345678", label_visibility="collapsed")
+        if st.button("查詢記錄", use_container_width=True):
+            phone_clean = lookup_phone.strip()
+            if phone_clean:
+                sess = get_session_by_phone(phone_clean)
+                if sess:
+                    st.session_state.customer_sid = sess["session_id"]
                     st.session_state.customer_name = sess["customer_name"]
                     st.session_state.page = "chat"
-                    st.query_params["sid"] = sid_clean
+                    st.query_params["sid"] = sess["session_id"]
                     st.rerun()
                 else:
-                    st.error("找不到此編號，或該諮詢已結案。")
+                    st.error("找不到記錄，或諮詢已結案。")
 
     cats = list(CATEGORIES.items())
     col_a, col_b = st.columns(2, gap="large")
@@ -566,6 +577,7 @@ def show_register():
 
     with st.form("register_form"):
         name = st.text_input("您的姓名", placeholder="請輸入姓名")
+        phone = st.text_input("手機號碼（選填，方便日後查詢記錄）", placeholder="例如：0912345678")
         question = st.text_area(
             "您的問題",
             placeholder="請輸入您想詢問的問題⋯⋯",
@@ -579,7 +591,7 @@ def show_register():
         elif not question.strip():
             st.error("請填寫問題")
         else:
-            sid = create_session(name.strip(), cat_name)
+            sid = create_session(name.strip(), cat_name, phone.strip())
             add_message(sid, "customer", question.strip())
             send_notification(name.strip(), cat_name, question.strip(), sid)
             st.session_state.customer_sid = sid
