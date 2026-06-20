@@ -319,13 +319,14 @@ def get_stats():
         st.warning(f"⚠️ 資料庫連線異常：{e}")
         return {"total": 0, "today": 0, "pending": 0, "replied": 0}
 
-def send_notification(name: str, category: str, question: str, sid: str):
+def send_notification(name: str, category: str, question: str, sid: str, is_followup: bool = False):
     token   = st.secrets.get("line_token", "")
     user_id = st.secrets.get("line_user_id", "")
     if not token or not user_id:
         return
     try:
-        text = f"【新問卦】\n姓名：{name}\n分區：{category}\n編號：{sid}\n\n問題：\n{question[:200]}"
+        header = "【追加提問】" if is_followup else "【新問卦】"
+        text = f"{header}\n姓名：{name}\n分區：{category}\n編號：{sid}\n\n問題：\n{question[:200]}"
         _req.post(
             "https://api.line.me/v2/bot/message/push",
             headers={
@@ -352,6 +353,7 @@ def init_state():
         "reply_ver": 0,
         "admin_name_search": "",
         "admin_sort_mode": "最新時間",
+        "_clear_storage": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -365,6 +367,9 @@ def init_state():
             st.session_state.customer_sid = sid
             st.session_state.customer_name = sess["customer_name"]
             st.session_state.page = "chat"
+        else:
+            st.query_params.clear()
+            st.session_state["_clear_storage"] = True
 
 init_state()
 
@@ -498,6 +503,13 @@ with st.sidebar:
 
 # ── Customer: Home ────────────────────────────────────────────────────────────
 def show_home():
+    if st.session_state.get("_clear_storage"):
+        _components.html("""<script>
+localStorage.removeItem('iching_sid');
+</script>""", height=0)
+        st.session_state["_clear_storage"] = False
+        st.info("您之前的諮詢已結案。如需繼續，請重新選擇分區問卦。")
+
     _components.html("""<script>
 const sid = localStorage.getItem('iching_sid');
 if (sid) {
@@ -648,6 +660,10 @@ def show_chat():
                 st.markdown(f"**【小老師解卦】**\n\n{msg['content']}")
                 st.caption(fmt_time(msg["created_at"]))
 
+    if sess["is_closed"]:
+        st.info("✅ 此諮詢已由小老師結案。如需繼續問卦，請回首頁重新提問。")
+        return
+
     if messages and messages[-1]["role"] == "customer":
         st.info("⏳ 小老師正在為您研讀卦象，請稍候⋯⋯")
         from streamlit_autorefresh import st_autorefresh
@@ -656,7 +672,7 @@ def show_chat():
     user_q = st.chat_input("繼續提問⋯⋯")
     if user_q:
         add_message(sid, "customer", user_q)
-        send_notification(sess["customer_name"], sess["category"], user_q, sid)
+        send_notification(sess["customer_name"], sess["category"], user_q, sid, is_followup=True)
         st.rerun()
 
 # ── Admin: Dashboard ──────────────────────────────────────────────────────────
@@ -876,7 +892,7 @@ def show_admin_archive():
         preview = s["last_msg"] or "（無訊息）"
         preview = preview[:60] + ("…" if len(preview) > 60 else "")
 
-        ci, cb = st.columns([4, 1])
+        ci, cb1, cb2 = st.columns([4, 1, 1])
         with ci:
             st.markdown(f"""<div class="sess-card replied">
 <div>
@@ -889,7 +905,13 @@ def show_admin_archive():
 </div>
 <div class="sess-preview">💬 {preview}</div>
 </div>""", unsafe_allow_html=True)
-        with cb:
+        with cb1:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("查看", key=f"view_arch_{s['session_id']}", use_container_width=True):
+                st.session_state.admin_reply_sid = s["session_id"]
+                st.session_state.page = "admin_reply"
+                st.rerun()
+        with cb2:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🗑️ 刪除", key=f"del_arch_{s['session_id']}", use_container_width=True):
                 delete_session(s["session_id"])
