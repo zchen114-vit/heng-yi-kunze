@@ -4,7 +4,7 @@ from datetime import datetime
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="洞察易經的人生",
+    page_title="洞察易生的經歷",
     page_icon="☯",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -147,10 +147,6 @@ html, body, [class*="css"] { font-family: 'Noto Serif TC', 'Noto Serif', serif; 
     background: linear-gradient(135deg, #8B6914, #6B4F10) !important;
     box-shadow: 0 4px 14px rgba(139,105,20,0.38) !important;
 }
-#MainMenu { display: none !important; }
-footer    { display: none !important; }
-[data-testid="stToolbar"]          { display: none !important; }
-[data-testid="manage-app-button"]  { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -269,6 +265,15 @@ def init_state():
 
 init_state()
 
+# Manage App 按鈕：只有管理員模式才顯示
+if not st.session_state.admin_mode:
+    st.markdown("""<style>
+#MainMenu { display: none !important; }
+footer    { display: none !important; }
+[data-testid="stToolbar"]         { display: none !important; }
+[data-testid="manage-app-button"] { display: none !important; }
+</style>""", unsafe_allow_html=True)
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     if st.session_state.admin_mode:
@@ -302,7 +307,7 @@ with st.sidebar:
                     set_admin_password(new_pw)
                     st.success("密碼已更新")
     else:
-        st.markdown("## ☯ 洞察易經的人生")
+        st.markdown("## ☯ 洞察易生的經歷")
         st.markdown("---")
         st.markdown("**📋 個人資料**")
         new_name = st.text_input(
@@ -356,7 +361,7 @@ with st.sidebar:
 
 # ── Customer: Home ────────────────────────────────────────────────────────────
 def show_home():
-    st.markdown('<div class="main-title">洞察易經的人生</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">洞察易生的經歷</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="main-subtitle">靜心一問，易理自明 · 天地人和，坤澤長流</div>',
         unsafe_allow_html=True,
@@ -468,7 +473,7 @@ def show_admin():
     st.markdown("""<div class="admin-hdr">
 <span style="font-size:2rem;">🔐</span>
 <span>
-<div style="font-size:1.3rem;font-weight:700;letter-spacing:0.1em;">洞察易經的人生 · 管理後台</div>
+<div style="font-size:1.3rem;font-weight:700;letter-spacing:0.1em;">洞察易生的經歷 · 管理後台</div>
 <div style="font-size:0.82rem;color:#B8A070;margin-top:4px;">易經顧問專用 · 查閱與回覆所有來訪問卦</div>
 </span>
 </div>""", unsafe_allow_html=True)
