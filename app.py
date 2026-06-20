@@ -254,6 +254,17 @@ def get_all_sessions(cat_f=None, status_f=None):
     except Exception:
         return []
 
+def get_archived_sessions():
+    try:
+        params = {
+            "select": "*,messages(*)",
+            "is_closed": "eq.true",
+            "order": "updated_at.desc",
+        }
+        return _enrich(_get("sessions", params))
+    except Exception:
+        return []
+
 def close_session(sid: str):
     try:
         _patch("sessions", {"is_closed": True}, {"session_id": f"eq.{sid}"})
@@ -591,7 +602,13 @@ def show_admin():
         status_f=st.session_state.admin_status_filter,
     )
 
-    st.markdown(f"**共 {len(sessions)} 筆問卦**")
+    col_t, col_a = st.columns([3, 1])
+    with col_t:
+        st.markdown(f"**共 {len(sessions)} 筆問卦**")
+    with col_a:
+        if st.button("🗄️ 查看歸檔", use_container_width=True):
+            st.session_state.page = "admin_archive"
+            st.rerun()
 
     if not sessions:
         st.markdown('<div class="info-box">目前沒有符合條件的問卦記錄。</div>', unsafe_allow_html=True)
@@ -708,6 +725,51 @@ def show_admin_reply():
             st.session_state.admin_reply_sid = None
             st.rerun()
 
+# ── Admin: Archive ────────────────────────────────────────────────────────────
+def show_admin_archive():
+    if st.button("← 後台"):
+        st.session_state.page = "admin"
+        st.rerun()
+
+    st.markdown("""<div class="admin-hdr">
+<span style="font-size:2rem;">🗄️</span>
+<span>
+<div style="font-size:1.3rem;font-weight:700;letter-spacing:0.1em;">歸檔記錄</div>
+<div style="font-size:0.82rem;color:#B8A070;margin-top:4px;">已結案的問卦記錄</div>
+</span>
+</div>""", unsafe_allow_html=True)
+
+    sessions = get_archived_sessions()
+    st.markdown(f"**共 {len(sessions)} 筆歸檔**")
+
+    if not sessions:
+        st.markdown('<div class="info-box">目前沒有歸檔記錄。</div>', unsafe_allow_html=True)
+        return
+
+    for s in sessions:
+        cat_icon = CATEGORIES.get(s["category"], {}).get("icon", "☯")
+        preview = s["last_msg"] or "（無訊息）"
+        preview = preview[:60] + ("…" if len(preview) > 60 else "")
+
+        ci, cb = st.columns([4, 1])
+        with ci:
+            st.markdown(f"""<div class="sess-card replied">
+<div>
+  <span class="sess-name">{s['customer_name']}</span>
+  <span style="font-size:0.8rem;color:#7A5C3A;margin-left:8px;">{cat_icon} {s['category']}</span>
+  <span class="badge badge-green">🗄️ 已歸檔</span>
+</div>
+<div class="sess-meta">
+  編號：{s['session_id']} · {s['msg_count']} 則 · {fmt_time(s['updated_at'])}
+</div>
+<div class="sess-preview">💬 {preview}</div>
+</div>""", unsafe_allow_html=True)
+        with cb:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🗑️ 刪除", key=f"del_arch_{s['session_id']}", use_container_width=True):
+                delete_session(s["session_id"])
+                st.rerun()
+
 # ── Router ────────────────────────────────────────────────────────────────────
 page = st.session_state.page
 
@@ -716,6 +778,8 @@ if st.session_state.admin_mode:
         show_admin()
     elif page == "admin_reply":
         show_admin_reply()
+    elif page == "admin_archive":
+        show_admin_archive()
     else:
         st.session_state.page = "admin"
         st.rerun()
