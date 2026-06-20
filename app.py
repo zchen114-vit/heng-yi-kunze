@@ -6,14 +6,14 @@ import os
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="恆易 · 坤澤",
+    page_title="洞察易經的人生",
     page_icon="☯",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-ADMIN_PASSWORD = "kunze2024"   # ← 請自行更改
+ADMIN_PASSWORD = st.secrets.get("admin_password", "kunze2024")
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "consultations.db")
 
 CATEGORIES = {
@@ -321,7 +321,7 @@ with st.sidebar:
             st.session_state.page = "home"
             st.rerun()
     else:
-        st.markdown("## ☯ 恆易 · 坤澤")
+        st.markdown("## ☯ 洞察易經的人生")
         st.markdown("---")
         st.markdown("**📋 個人檔案**")
 
@@ -378,7 +378,7 @@ with st.sidebar:
 
 # ── Customer: Home ────────────────────────────────────────────────────────────
 def show_home():
-    st.markdown('<div class="main-title">恆易 · 坤澤</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">洞察易經的人生</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="main-subtitle">靜心一問，易理自明 · 天地人和，坤澤長流</div>',
         unsafe_allow_html=True,
@@ -490,7 +490,7 @@ def show_admin():
     st.markdown("""<div class="admin-hdr">
 <span style="font-size:2rem;">🔐</span>
 <span>
-<div style="font-size:1.3rem;font-weight:700;letter-spacing:0.1em;">恆易 · 坤澤 管理後台</div>
+<div style="font-size:1.3rem;font-weight:700;letter-spacing:0.1em;">洞察易經的人生 · 管理後台</div>
 <div style="font-size:0.82rem;color:#B8A070;margin-top:4px;">易經顧問專用 · 查閱與回覆所有諮詢</div>
 </span>
 </div>""", unsafe_allow_html=True)
