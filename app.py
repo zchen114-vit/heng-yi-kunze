@@ -255,6 +255,19 @@ def set_admin_password(new_pw: str):
     except Exception:
         st.error("無法連接資料庫，請稍後再試")
 
+def show_db_debug():
+    st.markdown("### 🔧 連線診斷")
+    url = st.secrets.get("supabase_url", "❌ 未設定")
+    key = st.secrets.get("supabase_key", "❌ 未設定")
+    st.code(f"supabase_url = {repr(url)}\nsupabase_key = {repr(key[:20] + '...' if len(str(key)) > 20 else key)}")
+    try:
+        import socket
+        host = url.replace("https://", "").replace("http://", "").split("/")[0]
+        ip = socket.gethostbyname(host)
+        st.success(f"DNS OK：{host} → {ip}")
+    except Exception as e:
+        st.error(f"DNS 失敗：{e}")
+
 def get_stats():
     try:
         today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -494,6 +507,7 @@ def show_chat():
 
 # ── Admin: Dashboard ──────────────────────────────────────────────────────────
 def show_admin():
+    show_db_debug()
     stats = get_stats()
 
     st.markdown("""<div class="admin-hdr">
