@@ -147,6 +147,10 @@ html, body, [class*="css"] { font-family: 'Noto Serif TC', 'Noto Serif', serif; 
     background: linear-gradient(135deg, #8B6914, #6B4F10) !important;
     box-shadow: 0 4px 14px rgba(139,105,20,0.38) !important;
 }
+#MainMenu { display: none !important; }
+footer    { display: none !important; }
+[data-testid="stToolbar"]          { display: none !important; }
+[data-testid="manage-app-button"]  { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
