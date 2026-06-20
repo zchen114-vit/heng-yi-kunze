@@ -377,6 +377,7 @@ def init_state():
         "admin_status_filter": "全部",
         "customer_sid": None,
         "customer_name": "",
+        "customer_category": "",
         "selected_cat": None,
         "reply_ver": 0,
         "admin_name_search": "",
@@ -395,6 +396,7 @@ def init_state():
         if sess and not sess["is_closed"]:
             st.session_state.customer_sid = sid
             st.session_state.customer_name = sess["customer_name"]
+            st.session_state.customer_category = sess.get("category", "")
             st.session_state.page = "chat"
         else:
             st.query_params.clear()
@@ -488,14 +490,14 @@ with st.sidebar:
         st.markdown("---")
 
         if st.session_state.page == "chat" and st.session_state.customer_sid:
-            sid = st.session_state.customer_sid
-            sess = get_session(sid)
-            if sess:
-                icon = CATEGORIES.get(sess["category"], {}).get("icon", "☯")
-                st.markdown(f"**目前分區：** {icon} {sess['category']}")
+            cat = st.session_state.get("customer_category", "")
+            if cat:
+                icon = CATEGORIES.get(cat, {}).get("icon", "☯")
+                st.markdown(f"**目前分區：** {icon} {cat}")
             if st.button("← 回到首頁", use_container_width=True):
                 st.session_state.page = "home"
                 st.session_state.customer_sid = None
+                st.session_state.customer_category = ""
                 st.query_params.clear()
                 st.rerun()
         elif st.session_state.page == "register":
@@ -571,6 +573,7 @@ if (sid) {
                     found_sid = sess["session_id"]
                     st.session_state.customer_sid = found_sid
                     st.session_state.customer_name = sess["customer_name"]
+                    st.session_state.customer_category = sess.get("category", "")
                     st.session_state.page = "chat"
                     _components.html(f"""<script>
 localStorage.setItem('iching_sid', '{found_sid}');
@@ -674,6 +677,7 @@ def show_chat():
         if st.button("← 首頁"):
             st.session_state.page = "home"
             st.session_state.customer_sid = None
+            st.session_state.customer_category = ""
             st.query_params.clear()
             st.rerun()
     with c2:
