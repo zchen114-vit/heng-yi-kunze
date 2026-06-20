@@ -398,9 +398,12 @@ def init_state():
             st.session_state.customer_name = sess["customer_name"]
             st.session_state.customer_category = sess.get("category", "")
             st.session_state.page = "chat"
-        else:
+        elif sess and sess["is_closed"]:
             st.query_params.clear()
             st.session_state["_clear_storage"] = True
+        # else: sess is None (DB error or invalid ID) - clear URL but preserve localStorage
+        else:
+            st.query_params.clear()
 
 init_state()
 
