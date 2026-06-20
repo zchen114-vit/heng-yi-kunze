@@ -851,6 +851,7 @@ def show_admin_reply():
     back_page = st.session_state.get("_admin_reply_from", "admin")
     back_label = "← 歸檔" if back_page == "admin_archive" else "← 後台"
     if st.button(back_label):
+        st.session_state.pop(f"_del_confirm_{sid}", None)
         st.session_state.page = back_page
         st.session_state.admin_reply_sid = None
         st.rerun()
@@ -916,6 +917,7 @@ def show_admin_reply():
     with r3:
         if st.button("✅ 結案歸檔", use_container_width=True):
             close_session(sid)
+            st.session_state.pop(f"_del_confirm_{sid}", None)
             st.session_state.page = "admin"
             st.session_state.admin_reply_sid = None
             st.rerun()
