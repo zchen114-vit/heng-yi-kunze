@@ -1,6 +1,8 @@
 import streamlit as st
 import uuid
 import requests as _req
+import smtplib, ssl
+from email.mime.text import MIMEText
 from datetime import datetime
 
 # ── Page Config ───────────────────────────────────────────────────────────────
@@ -306,6 +308,24 @@ def get_stats():
         st.warning(f"⚠️ 資料庫連線異常：{e}")
         return {"total": 0, "today": 0, "pending": 0, "replied": 0}
 
+def send_notification(name: str, category: str, question: str, sid: str):
+    email    = st.secrets.get("notify_email", "")
+    password = st.secrets.get("notify_password", "")
+    if not email or not password:
+        return
+    try:
+        body = f"新問卦通知\n\n姓名：{name}\n分區：{category}\n編號：{sid}\n\n問題：\n{question}"
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = f"【洞察易生的經歷】新問卦 · {name} · {category}"
+        msg["From"] = email
+        msg["To"]   = email
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as s:
+            s.login(email, password)
+            s.send_message(msg)
+    except Exception:
+        pass
+
 # ── Session State Init ────────────────────────────────────────────────────────
 def init_state():
     defaults = {
@@ -318,6 +338,8 @@ def init_state():
         "customer_name": "",
         "selected_cat": None,
         "reply_ver": 0,
+        "admin_name_search": "",
+        "admin_sort_mode": "最新時間",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -438,6 +460,21 @@ def show_home():
 　選擇分區後填寫姓名與問題，靜候小老師為您解卦。
 </div>""", unsafe_allow_html=True)
 
+    with st.expander("🔍 查詢舊記錄"):
+        lookup_sid = st.text_input("輸入諮詢編號", placeholder="例如：A1B2C3D4", label_visibility="collapsed")
+        if st.button("查詢", use_container_width=True):
+            sid_clean = lookup_sid.upper().strip()
+            if sid_clean:
+                sess = get_session(sid_clean)
+                if sess and not sess["is_closed"]:
+                    st.session_state.customer_sid = sid_clean
+                    st.session_state.customer_name = sess["customer_name"]
+                    st.session_state.page = "chat"
+                    st.query_params["sid"] = sid_clean
+                    st.rerun()
+                else:
+                    st.error("找不到此編號，或該諮詢已結案。")
+
     cats = list(CATEGORIES.items())
     col_a, col_b = st.columns(2, gap="large")
     for i, (cat_name, info) in enumerate(cats):
@@ -491,6 +528,7 @@ def show_register():
         else:
             sid = create_session(name.strip(), cat_name)
             add_message(sid, "customer", question.strip())
+            send_notification(name.strip(), cat_name, question.strip(), sid)
             st.session_state.customer_sid = sid
             st.session_state.customer_name = name.strip()
             st.session_state.page = "chat"
@@ -602,19 +640,39 @@ def show_admin():
         status_f=st.session_state.admin_status_filter,
     )
 
-    col_t, col_a = st.columns([3, 1])
-    with col_t:
-        st.markdown(f"**共 {len(sessions)} 筆問卦**")
-    with col_a:
-        if st.button("🗄️ 查看歸檔", use_container_width=True):
+    # 搜尋 + 排序
+    sa, sb, sc = st.columns([3, 2, 1])
+    with sa:
+        search = st.text_input("🔍 搜尋姓名", value=st.session_state.admin_name_search,
+                               placeholder="輸入姓名或姓氏", label_visibility="collapsed")
+        st.session_state.admin_name_search = search
+    with sb:
+        sort_mode = st.radio("排列", ["最新時間", "姓氏分組"], horizontal=True,
+                             index=["最新時間", "姓氏分組"].index(st.session_state.admin_sort_mode))
+        st.session_state.admin_sort_mode = sort_mode
+    with sc:
+        if st.button("🗄️ 歸檔", use_container_width=True):
             st.session_state.page = "admin_archive"
             st.rerun()
+
+    if search:
+        sessions = [s for s in sessions if search in s["customer_name"]]
+    if sort_mode == "姓氏分組":
+        sessions = sorted(sessions, key=lambda s: s["customer_name"])
+
+    st.markdown(f"**共 {len(sessions)} 筆問卦**")
 
     if not sessions:
         st.markdown('<div class="info-box">目前沒有符合條件的問卦記錄。</div>', unsafe_allow_html=True)
         return
 
+    current_surname = None
     for s in sessions:
+        if sort_mode == "姓氏分組":
+            surname = s["customer_name"][0] if s["customer_name"] else "？"
+            if surname != current_surname:
+                current_surname = surname
+                st.markdown(f"#### 　{surname} 姓")
         is_pending = s["last_role"] == "customer" or s["msg_count"] == 0
         css_cls = "pending" if is_pending else "replied"
         status_html = (
