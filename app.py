@@ -240,12 +240,14 @@ def get_session_by_phone(phone: str):
     except Exception:
         return None
 
+_DB_ERROR = object()  # sentinel: DB unreachable (distinct from "session not found")
+
 def get_session(sid: str):
     try:
         data = _get("sessions", {"session_id": f"eq.{sid}", "limit": "1"})
-        return data[0] if data else None
+        return data[0] if data else None  # None = session genuinely not in DB
     except Exception:
-        return None
+        return _DB_ERROR  # connection/timeout error
 
 def add_message(sid: str, role: str, content: str) -> bool:
     try:
@@ -393,17 +395,21 @@ def init_state():
     if "sid" in params and st.session_state.customer_sid is None:
         sid = params["sid"]
         sess = get_session(sid)
-        if sess and not sess["is_closed"]:
+        if sess is _DB_ERROR:
+            # DB temporarily unreachable — clear URL but keep localStorage intact
+            st.query_params.clear()
+        elif sess is None:
+            # Session genuinely not found (deleted or never existed) — clear everything
+            st.query_params.clear()
+            st.session_state["_clear_storage"] = True
+        elif sess["is_closed"]:
+            st.query_params.clear()
+            st.session_state["_clear_storage"] = True
+        else:
             st.session_state.customer_sid = sid
             st.session_state.customer_name = sess["customer_name"]
             st.session_state.customer_category = sess.get("category", "")
             st.session_state.page = "chat"
-        elif sess and sess["is_closed"]:
-            st.query_params.clear()
-            st.session_state["_clear_storage"] = True
-        # else: sess is None (DB error or invalid ID) - clear URL but preserve localStorage
-        else:
-            st.query_params.clear()
 
 init_state()
 
@@ -666,7 +672,10 @@ def show_chat():
         return
 
     sess = get_session(sid)
-    if not sess:
+    if sess is _DB_ERROR:
+        st.error("⚠️ 資料庫暫時無法連線，請稍後重新整理。")
+        return
+    if sess is None:
         st.error("找不到此諮詢記錄。")
         return
 
@@ -850,7 +859,10 @@ def show_admin_reply():
         return
 
     sess = get_session(sid)
-    if not sess:
+    if sess is _DB_ERROR:
+        st.error("⚠️ 資料庫暫時無法連線，請稍後重試。")
+        return
+    if sess is None:
         st.error("找不到此問卦記錄。")
         return
 
