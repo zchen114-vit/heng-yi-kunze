@@ -40,7 +40,6 @@ CATEGORIES = {
     },
 }
 
-PREFERENCES = ["偏好傳統解讀", "現代化解讀", "中西合璧解讀", "直覺式解讀"]
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -281,7 +280,6 @@ def init_state():
         "admin_status_filter": "全部",
         "customer_sid": None,
         "customer_name": "",
-        "customer_pref": PREFERENCES[0],
         "reply_ver": 0,
     }
     for k, v in defaults.items():
@@ -295,7 +293,6 @@ def init_state():
         if sess and not sess["is_closed"]:
             st.session_state.customer_sid = sid
             st.session_state.customer_name = sess["customer_name"]
-            st.session_state.customer_pref = sess.get("preference") or PREFERENCES[0]
             st.session_state.page = "chat"
 
 init_state()
@@ -349,11 +346,6 @@ with st.sidebar:
             "您的姓名", value=st.session_state.customer_name, placeholder="請輸入姓名"
         )
         st.session_state.customer_name = new_name
-        new_pref = st.selectbox(
-            "解讀偏好", PREFERENCES,
-            index=PREFERENCES.index(st.session_state.customer_pref)
-        )
-        st.session_state.customer_pref = new_pref
         st.markdown("---")
 
         if st.session_state.page == "chat" and st.session_state.customer_sid:
@@ -404,12 +396,11 @@ def show_home():
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
 
     name = st.session_state.customer_name or "訪客"
-    pref = st.session_state.customer_pref
     st.markdown(f"""<div class="info-box">
 　歡迎，<b>{name}</b>。<br><br>
 　《易經》六十四卦，象天地萬物之變化，述人事吉凶之道理。<br>
-　本館採「<b>{pref}</b>」為您解讀，問題無需複雜，一心一念即可。<br><br>
-　請選擇下方分區，進入後輸入您的問題，顧問將為您逐一卜卦解析。
+　問題無需複雜，一心一念即可，顧問將為您逐一卜卦解析。<br><br>
+　請選擇下方分區，進入後輸入您的問題。
 </div>""", unsafe_allow_html=True)
 
     if not st.session_state.customer_name:
@@ -430,7 +421,7 @@ def show_home():
                 sid = create_session(
                     st.session_state.customer_name,
                     cat_name,
-                    st.session_state.customer_pref,
+                    "",
                 )
                 st.session_state.customer_sid = sid
                 st.session_state.page = "chat"
