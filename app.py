@@ -480,9 +480,9 @@ with st.sidebar:
         st.markdown("""<small>
 <b>使用說明</b><br>
 ① 選擇諮詢分區<br>
-② 填寫姓名、手機號與問題<br>
+② 填寫姓名與問題<br>
 ③ 靜候小老師解讀回覆<br><br>
-留下手機號可隨時回來查詢記錄。
+設定查詢密碼可隨時回來查閱記錄。
 </small>""", unsafe_allow_html=True)
 
         st.markdown("---")
@@ -523,7 +523,7 @@ if (sid) {
 </div>""", unsafe_allow_html=True)
 
     with st.expander("📱 查詢我的諮詢記錄"):
-        lookup_phone = st.text_input("輸入當時留下的手機號碼", placeholder="例如：0912345678", label_visibility="collapsed")
+        lookup_phone = st.text_input("輸入當時設定的查詢密碼", placeholder="您設定的查詢密碼", label_visibility="collapsed")
         if st.button("查詢記錄", use_container_width=True):
             phone_clean = lookup_phone.strip()
             if phone_clean:
@@ -575,7 +575,7 @@ def show_register():
 
     with st.form("register_form"):
         name = st.text_input("您的姓名", placeholder="請輸入姓名")
-        phone = st.text_input("手機號碼（選填，方便日後查詢記錄）", placeholder="例如：0912345678")
+        phone = st.text_input("查詢密碼（選填，可用手機號、暱稱等任意文字）", placeholder="設定一個您記得住的查詢密碼")
         question = st.text_area(
             "您的問題",
             placeholder="請輸入您想詢問的問題⋯⋯",
