@@ -592,12 +592,12 @@ def show_register():
             sid = create_session(name.strip(), cat_name, phone.strip())
             add_message(sid, "customer", question.strip())
             send_notification(name.strip(), cat_name, question.strip(), sid)
-            st.session_state.customer_sid = sid
-            st.session_state.customer_name = name.strip()
-            st.session_state.page = "chat"
-            st.query_params["sid"] = sid
-            _components.html(f"<script>localStorage.setItem('iching_sid','{sid}');</script>", height=0)
-            st.rerun()
+            st.success("問卦已送出，正在跳轉⋯⋯")
+            _components.html(f"""<script>
+localStorage.setItem('iching_sid', '{sid}');
+window.parent.location.href = '?sid={sid}';
+</script>""", height=0)
+            st.stop()
 
 # ── Customer: Chat ────────────────────────────────────────────────────────────
 def show_chat():
@@ -650,13 +650,13 @@ def show_chat():
 
     if messages and messages[-1]["role"] == "customer":
         st.info("⏳ 小老師正在為您研讀卦象，請稍候⋯⋯")
-        _components.html("""<script>
-setTimeout(function(){ window.parent.location.reload(); }, 30000);
-</script>""", height=0)
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=20000, key="chat_autorefresh")
 
     user_q = st.chat_input("繼續提問⋯⋯")
     if user_q:
         add_message(sid, "customer", user_q)
+        send_notification(sess["customer_name"], sess["category"], user_q, sid)
         st.rerun()
 
 # ── Admin: Dashboard ──────────────────────────────────────────────────────────
