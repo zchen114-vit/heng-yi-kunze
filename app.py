@@ -2,7 +2,9 @@ import streamlit as st
 import streamlit.components.v1 as _components
 import uuid
 import requests as _req
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_TAIWAN = timezone(timedelta(hours=8))
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -188,12 +190,20 @@ def _delete(table, params=None):
 def fmt_time(ts):
     if not ts:
         return ""
-    return str(ts)[:16].replace("T", " ")
+    try:
+        s = str(ts).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        tw = dt.astimezone(_TAIWAN)
+        return tw.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(ts)[:16].replace("T", " ")
 
 def _enrich(sessions):
     result = []
     for s in sessions:
-        msgs = sorted(s.get("messages", []), key=lambda m: m["created_at"])
+        msgs = sorted(s.get("messages", []), key=lambda m: m.get("created_at") or "")
         last = msgs[-1] if msgs else None
         result.append({
             **s,
@@ -308,10 +318,10 @@ def set_admin_password(new_pw: str):
 def get_stats():
     try:
         rows = _enrich(_get("sessions", {"select": "*,messages(*)", "is_closed": "eq.false"}))
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(_TAIWAN).strftime("%Y-%m-%d")
         return {
             "total":   len(rows),
-            "today":   sum(1 for s in rows if str(s.get("created_at", "")).startswith(today)),
+            "today":   sum(1 for s in rows if fmt_time(s.get("created_at", "")).startswith(today)),
             "pending": sum(1 for s in rows if s["last_role"] == "customer" or s["msg_count"] == 0),
             "replied": sum(1 for s in rows if s["last_role"] == "consultant"),
         }
@@ -509,8 +519,8 @@ localStorage.removeItem('iching_sid');
 </script>""", height=0)
         st.session_state["_clear_storage"] = False
         st.info("您之前的諮詢已結案。如需繼續，請重新選擇分區問卦。")
-
-    _components.html("""<script>
+    else:
+        _components.html("""<script>
 const sid = localStorage.getItem('iching_sid');
 if (sid) {
     const url = new URL(window.parent.location.href);
@@ -833,6 +843,16 @@ def show_admin_reply():
                     st.caption(fmt_time(msg["created_at"]))
 
     st.markdown("---")
+
+    if sess["is_closed"]:
+        st.info("🗄️ 此問卦已歸檔。")
+        if st.button("🗑️ 刪除此記錄", use_container_width=True, key="del_closed"):
+            delete_session(sid)
+            st.session_state.page = "admin_archive"
+            st.session_state.admin_reply_sid = None
+            st.rerun()
+        return
+
     st.markdown("### ✍ 卜卦解讀回覆")
 
     reply = st.text_area(
