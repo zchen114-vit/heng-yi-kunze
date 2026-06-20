@@ -250,7 +250,7 @@ def get_session(sid: str):
 def add_message(sid: str, role: str, content: str):
     try:
         _post("messages", {"session_id": sid, "role": role, "content": content})
-        _patch("sessions", {"updated_at": datetime.utcnow().isoformat()},
+        _patch("sessions", {"updated_at": datetime.now(timezone.utc).isoformat()},
                {"session_id": f"eq.{sid}"})
     except Exception as e:
         st.error(f"訊息儲存失敗：{e}")
@@ -258,7 +258,8 @@ def add_message(sid: str, role: str, content: str):
 def get_messages(sid: str):
     try:
         return _get("messages", {"session_id": f"eq.{sid}", "order": "created_at.asc"})
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ 載入訊息失敗：{e}")
         return []
 
 def get_all_sessions(cat_f=None, status_f=None):
@@ -276,7 +277,8 @@ def get_all_sessions(cat_f=None, status_f=None):
         elif status_f == "已解讀":
             rows = [s for s in rows if s["last_role"] == "consultant"]
         return rows
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ 載入問卦記錄失敗：{e}")
         return []
 
 def get_archived_sessions():
@@ -287,7 +289,8 @@ def get_archived_sessions():
             "order": "updated_at.desc",
         }
         return _enrich(_get("sessions", params))
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ 載入歸檔記錄失敗：{e}")
         return []
 
 def close_session(sid: str):
@@ -760,7 +763,7 @@ def show_admin():
             st.rerun()
 
     if search:
-        sessions = [s for s in sessions if search in s["customer_name"]]
+        sessions = [s for s in sessions if search.lower() in s["customer_name"].lower()]
     if sort_mode == "姓氏分組":
         sessions = sorted(sessions, key=lambda s: s["customer_name"])
 
