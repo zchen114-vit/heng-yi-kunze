@@ -921,10 +921,23 @@ def show_admin_reply():
             st.rerun()
     with r4:
         if st.button("🗑️ 刪除問卦", use_container_width=True):
-            delete_session(sid)
-            st.session_state.page = "admin"
-            st.session_state.admin_reply_sid = None
+            st.session_state[f"_del_confirm_{sid}"] = True
             st.rerun()
+
+    if st.session_state.get(f"_del_confirm_{sid}"):
+        st.error("⚠️ 確定要永久刪除此問卦及所有訊息？此操作無法復原。")
+        cd1, cd2, _ = st.columns([1, 1, 2])
+        with cd1:
+            if st.button("✅ 確認刪除", key=f"_del_yes_{sid}"):
+                delete_session(sid)
+                st.session_state.pop(f"_del_confirm_{sid}", None)
+                st.session_state.page = "admin"
+                st.session_state.admin_reply_sid = None
+                st.rerun()
+        with cd2:
+            if st.button("❌ 取消", key=f"_del_no_{sid}"):
+                st.session_state.pop(f"_del_confirm_{sid}", None)
+                st.rerun()
 
 # ── Admin: Archive ────────────────────────────────────────────────────────────
 def show_admin_archive():
