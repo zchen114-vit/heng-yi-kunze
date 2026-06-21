@@ -265,7 +265,7 @@ def get_messages(sid: str):
         return _get("messages", {"session_id": f"eq.{sid}", "order": "created_at.asc"})
     except Exception as e:
         st.error(f"⚠️ 載入訊息失敗：{e}")
-        return []
+        return None  # None = DB error, [] = genuinely no messages
 
 def get_all_sessions(cat_f=None, status_f=None):
     try:
@@ -300,7 +300,10 @@ def get_archived_sessions():
 
 def close_session(sid: str):
     try:
-        _patch("sessions", {"is_closed": True}, {"session_id": f"eq.{sid}"})
+        _patch("sessions", {
+            "is_closed": True,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, {"session_id": f"eq.{sid}"})
     except Exception as e:
         st.error(f"結案失敗：{e}")
 
@@ -385,7 +388,8 @@ def init_state():
         "reply_ver": 0,
         "admin_name_search": "",
         "admin_sort_mode": "最新時間",
-        "_clear_storage": False,
+        "_clear_storage": False,       # clear localStorage + show "session closed" notice
+        "_clear_storage_quiet": False,  # clear localStorage silently (voluntary navigation)
         "_admin_reply_from": "admin",
     }
     for k, v in defaults.items():
@@ -435,6 +439,9 @@ with st.sidebar:
             _cur = st.session_state.admin_reply_sid
             if _cur:
                 st.session_state.pop(f"_del_confirm_{_cur}", None)
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("_del_arch_confirm_"):
+                    st.session_state.pop(_k, None)
             st.session_state.page = "admin"
             st.session_state.admin_reply_sid = None
             st.rerun()
@@ -514,6 +521,7 @@ with st.sidebar:
                 st.session_state.page = "home"
                 st.session_state.customer_sid = None
                 st.session_state.customer_category = ""
+                st.session_state["_clear_storage_quiet"] = True
                 st.query_params.clear()
                 st.rerun()
         elif st.session_state.page == "register":
@@ -547,11 +555,13 @@ with st.sidebar:
 # ── Customer: Home ────────────────────────────────────────────────────────────
 def show_home():
     _show_clear = st.session_state.get("_clear_storage", False)
-    if _show_clear:
+    _quiet_clear = st.session_state.get("_clear_storage_quiet", False)
+    if _show_clear or _quiet_clear:
         _components.html("""<script>
 localStorage.removeItem('iching_sid');
 </script>""", height=0)
         st.session_state["_clear_storage"] = False
+        st.session_state["_clear_storage_quiet"] = False
     else:
         _components.html("""<script>
 const sid = localStorage.getItem('iching_sid');
@@ -569,7 +579,7 @@ if (sid) {
         unsafe_allow_html=True,
     )
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
-    if _show_clear:
+    if _show_clear and not _quiet_clear:
         st.info("您之前的諮詢已結案。如需繼續，請重新選擇分區問卦。")
 
     st.markdown("""<div class="info-box">
@@ -657,6 +667,7 @@ def show_register():
             if not sid:
                 return
             if not add_message(sid, "customer", question.strip()):
+                delete_session(sid)  # remove orphaned session so phone lookup won't surface it
                 return
             send_notification(name.strip(), cat_name, question.strip(), sid)
             st.success("問卦已送出，正在跳轉⋯⋯")
@@ -701,6 +712,7 @@ def show_chat():
             st.session_state.page = "home"
             st.session_state.customer_sid = None
             st.session_state.customer_category = ""
+            st.session_state["_clear_storage_quiet"] = True
             st.query_params.clear()
             st.rerun()
     with c2:
@@ -710,6 +722,10 @@ def show_chat():
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
 
     messages = get_messages(sid)
+    if messages is None:
+        if st.button("🔄 重新整理", key="_chat_msg_retry"):
+            st.rerun()
+        return
 
     for msg in messages:
         if msg["role"] == "customer":
@@ -731,9 +747,10 @@ def show_chat():
 
     user_q = st.chat_input("繼續提問⋯⋯")
     if user_q:
-        add_message(sid, "customer", user_q)
-        send_notification(sess["customer_name"], sess["category"], user_q, sid, is_followup=True)
-        st.rerun()
+        if add_message(sid, "customer", user_q):
+            send_notification(sess["customer_name"], sess["category"], user_q, sid, is_followup=True)
+            st.rerun()
+        # else: error shown by add_message(); user can retry without losing their text
 
 # ── Admin: Dashboard ──────────────────────────────────────────────────────────
 def show_admin():
@@ -895,6 +912,10 @@ def show_admin_reply():
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
 
     messages = get_messages(sid)
+    if messages is None:
+        if st.button("🔄 重新整理", key="_admin_msg_retry"):
+            st.rerun()
+        return
     if not messages:
         st.markdown('<div class="info-box">此來訪者尚未提問。</div>', unsafe_allow_html=True)
     else:
@@ -932,9 +953,10 @@ def show_admin_reply():
     with r1:
         if st.button("📤 發送解讀", use_container_width=True):
             if reply.strip():
-                add_message(sid, "consultant", reply.strip())
-                st.session_state.reply_ver += 1
-                st.rerun()
+                if add_message(sid, "consultant", reply.strip()):
+                    st.session_state.reply_ver += 1
+                    st.rerun()
+                # else: error shown by add_message(), keep text so admin can retry
             else:
                 st.error("請輸入解讀內容")
     with r2:
@@ -971,6 +993,9 @@ def show_admin_reply():
 # ── Admin: Archive ────────────────────────────────────────────────────────────
 def show_admin_archive():
     if st.button("← 後台"):
+        for k in list(st.session_state.keys()):
+            if k.startswith("_del_arch_confirm_"):
+                st.session_state.pop(k, None)
         st.session_state.page = "admin"
         st.rerun()
 
@@ -1019,8 +1044,22 @@ def show_admin_archive():
         with cb2:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🗑️ 刪除", key=f"del_arch_{s['session_id']}", use_container_width=True):
-                delete_session(s["session_id"])
+                st.session_state[f"_del_arch_confirm_{s['session_id']}"] = True
                 st.rerun()
+
+        arch_sid = s["session_id"]
+        if st.session_state.get(f"_del_arch_confirm_{arch_sid}"):
+            st.error(f"⚠️ 確定刪除「{_html.escape(s['customer_name'])}」的歸檔記錄？此操作無法復原。")
+            ca1, ca2, _ = st.columns([1, 1, 2])
+            with ca1:
+                if st.button("✅ 確認", key=f"_del_arch_yes_{arch_sid}"):
+                    delete_session(arch_sid)
+                    st.session_state.pop(f"_del_arch_confirm_{arch_sid}", None)
+                    st.rerun()
+            with ca2:
+                if st.button("❌ 取消", key=f"_del_arch_no_{arch_sid}"):
+                    st.session_state.pop(f"_del_arch_confirm_{arch_sid}", None)
+                    st.rerun()
 
 # ── Router ────────────────────────────────────────────────────────────────────
 page = st.session_state.page
