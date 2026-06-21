@@ -372,7 +372,7 @@ def send_notification(name: str, category: str, question: str, sid: str, is_foll
                 "Content-Type": "application/json",
             },
             json={"to": user_id, "messages": [{"type": "text", "text": text}]},
-            timeout=10,
+            timeout=5,
         )
     except Exception:
         pass
@@ -686,8 +686,8 @@ def show_register():
             if not add_message(sid, "customer", question.strip()):
                 delete_session(sid)  # remove orphaned session so phone lookup won't surface it
                 return
-            send_notification(name.strip(), cat_name, question.strip(), sid)
             st.success("問卦已送出，正在跳轉⋯⋯")
+            send_notification(name.strip(), cat_name, question.strip(), sid)
             _components.html(f"""<script>
 localStorage.setItem('iching_sid', '{sid}');
 window.parent.location.href = '?sid={sid}';
