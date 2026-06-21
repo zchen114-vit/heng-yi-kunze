@@ -325,12 +325,14 @@ def get_admin_password() -> str:
     except Exception:
         return _FALLBACK_PW
 
-def set_admin_password(new_pw: str):
+def set_admin_password(new_pw: str) -> bool:
     try:
         _post("config", {"key": "admin_password", "value": new_pw},
               {"Prefer": "resolution=merge-duplicates,return=representation"})
+        return True
     except Exception as e:
         st.error(f"無法更新密碼：{e}")
+        return False
 
 def get_stats():
     try:
@@ -476,8 +478,8 @@ with st.sidebar:
                 elif len(new_pw) < 6:
                     st.error("新密碼至少 6 個字元")
                 else:
-                    set_admin_password(new_pw)
-                    st.success("密碼已更新")
+                    if set_admin_password(new_pw):
+                        st.success("密碼已更新")
 
         with st.expander("💬 LINE 通知設定"):
             token = st.secrets.get("line_token", "")
