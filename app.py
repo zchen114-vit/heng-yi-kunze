@@ -851,7 +851,7 @@ def show_admin():
     if search:
         sessions = [s for s in sessions if search.lower() in (s["customer_name"] or "").lower()]
     if sort_mode == "姓氏分組":
-        sessions = sorted(sessions, key=lambda s: s["customer_name"])
+        sessions = sorted(sessions, key=lambda s: s["customer_name"] or "")
 
     st.markdown(f"**共 {len(sessions)} 筆問卦**")
 
