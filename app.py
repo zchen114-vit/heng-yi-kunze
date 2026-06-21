@@ -624,6 +624,7 @@ window.parent.location.href = '?sid={found_sid}';
                     st.stop()
                 else:
                     st.error("找不到記錄，或諮詢已結案。")
+        st.caption("忘記查詢密碼？請告知小老師您的姓名，由小老師協助查詢。")
 
     cats = list(CATEGORIES.items())
     col_a, col_b = st.columns(2, gap="large")
@@ -931,11 +932,15 @@ def show_admin_reply():
         st.rerun()
 
     cname_esc = _html.escape(sess["customer_name"])
+    pref = sess.get("preference", "") or ""
+    pref_esc = _html.escape(pref)
+    pref_display = f'<span style="font-family:monospace;background:#2D3B2A;color:#A0C870;padding:2px 8px;border-radius:4px;">{pref_esc}</span>' if pref else '<span style="color:#B8A070;font-style:italic;">（未設定）</span>'
     st.markdown(f"""<div class="chat-hdr">
 <span style="font-size:2rem;">{info["icon"]}</span>
 <span>
 <div class="chat-hdr-title">{cname_esc} · {category}</div>
 <div class="chat-hdr-sub">編號：{sid} · 建立：{fmt_time(sess['created_at'])}</div>
+<div class="chat-hdr-sub" style="margin-top:4px;">🔑 查詢密碼：{pref_display}</div>
 </span>
 </div>""", unsafe_allow_html=True)
 
