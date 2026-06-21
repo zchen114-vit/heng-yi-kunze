@@ -390,6 +390,7 @@ def init_state():
         "admin_sort_mode": "最新時間",
         "_clear_storage": False,       # clear localStorage + show "session closed" notice
         "_clear_storage_quiet": False,  # clear localStorage silently (voluntary navigation)
+        "_db_unreachable": False,       # suppress localStorage redirect when DB is down
         "_admin_reply_from": "admin",
     }
     for k, v in defaults.items():
@@ -403,6 +404,7 @@ def init_state():
         if sess is _DB_ERROR:
             # DB temporarily unreachable — clear URL but keep localStorage intact
             st.query_params.clear()
+            st.session_state["_db_unreachable"] = True
         elif sess is None:
             # Session genuinely not found (deleted or never existed) — clear everything
             st.query_params.clear()
@@ -554,15 +556,17 @@ with st.sidebar:
 
 # ── Customer: Home ────────────────────────────────────────────────────────────
 def show_home():
-    _show_clear = st.session_state.get("_clear_storage", False)
-    _quiet_clear = st.session_state.get("_clear_storage_quiet", False)
+    _show_clear   = st.session_state.get("_clear_storage", False)
+    _quiet_clear  = st.session_state.get("_clear_storage_quiet", False)
+    _db_down      = st.session_state.get("_db_unreachable", False)
     if _show_clear or _quiet_clear:
         _components.html("""<script>
 localStorage.removeItem('iching_sid');
 </script>""", height=0)
         st.session_state["_clear_storage"] = False
         st.session_state["_clear_storage_quiet"] = False
-    else:
+        st.session_state["_db_unreachable"] = False
+    elif not _db_down:
         _components.html("""<script>
 const sid = localStorage.getItem('iching_sid');
 if (sid) {
@@ -581,6 +585,11 @@ if (sid) {
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
     if _show_clear and not _quiet_clear:
         st.info("您之前的諮詢已結案。如需繼續，請重新選擇分區問卦。")
+    if _db_down:
+        st.warning("⚠️ 資料庫暫時無法連線，您的查詢記錄已暫時保留。請稍後再試或點擊「重新整理」。")
+        if st.button("🔄 重新整理", key="_home_db_retry"):
+            st.session_state["_db_unreachable"] = False
+            st.rerun()
 
     st.markdown("""<div class="info-box">
 　《易經》六十四卦，象天地萬物之變化，述人事吉凶之道理。<br><br>
