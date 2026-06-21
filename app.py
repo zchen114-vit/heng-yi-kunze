@@ -243,6 +243,20 @@ def get_session_by_phone(phone: str):
     except Exception:
         return _DB_ERROR
 
+def count_sessions_by_phone(phone: str) -> int:
+    """Count active sessions sharing this lookup password (for duplicate warning)."""
+    if not phone:
+        return 0
+    try:
+        data = _get("sessions", {
+            "select": "session_id",
+            "preference": f"eq.{phone.lower()}",
+            "is_closed": "eq.false",
+        })
+        return len(data) if data else 0
+    except Exception:
+        return 0
+
 def get_session(sid: str):
     try:
         data = _get("sessions", {"session_id": f"eq.{sid}", "limit": "1"})
@@ -394,10 +408,13 @@ def init_state():
         "reply_ver": 0,
         "admin_name_search": "",
         "admin_sort_mode": "最新時間",
-        "_clear_storage": False,       # clear localStorage + show "session closed" notice
+        "_clear_storage": False,        # clear localStorage + show "session closed" notice
         "_clear_storage_quiet": False,  # clear localStorage silently (voluntary navigation)
         "_db_unreachable": False,       # suppress localStorage redirect when DB is down
         "_admin_reply_from": "admin",
+        "_customer_self_closed": False, # customer clicked self-close → show custom success msg
+        "_clear_reply_draft": None,     # sid whose sessionStorage draft should be wiped
+        "arch_name_search": "",         # archive page search filter
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -569,6 +586,7 @@ def show_home():
     _show_clear   = st.session_state.get("_clear_storage", False)
     _quiet_clear  = st.session_state.get("_clear_storage_quiet", False)
     _db_down      = st.session_state.get("_db_unreachable", False)
+    _self_closed  = st.session_state.get("_customer_self_closed", False)
     if _show_clear or _quiet_clear:
         _components.html("""<script>
 localStorage.removeItem('iching_sid');
@@ -576,6 +594,7 @@ localStorage.removeItem('iching_sid');
         st.session_state["_clear_storage"] = False
         st.session_state["_clear_storage_quiet"] = False
         st.session_state["_db_unreachable"] = False
+        st.session_state["_customer_self_closed"] = False
     elif not _db_down:
         _components.html("""<script>
 const sid = localStorage.getItem('iching_sid');
@@ -593,7 +612,9 @@ if (sid) {
         unsafe_allow_html=True,
     )
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
-    if _show_clear and not _quiet_clear:
+    if _self_closed:
+        st.success("🙏 感謝您的諮詢！若有新的問題，歡迎重新選擇分區問卦。")
+    elif _show_clear and not _quiet_clear:
         st.info("您之前的諮詢已結案。如需繼續，請重新選擇分區問卦。")
     if _db_down:
         st.warning("⚠️ 資料庫暫時無法連線，您的查詢記錄已暫時保留。請稍後再試或點擊「重新整理」。")
@@ -770,6 +791,22 @@ def show_chat():
         st.info("✅ 此諮詢已由小老師結案。如需繼續問卦，請回首頁重新提問。")
         return
 
+    if messages and messages[-1]["role"] == "consultant":
+        st.markdown("---")
+        st.caption("解讀已收到？可主動結案：")
+        if st.button("🙏 感謝小老師，結案", key="_customer_self_close"):
+            if close_session(sid):
+                st.session_state["_clear_storage"] = True
+                st.session_state["_customer_self_closed"] = True
+                st.session_state.customer_sid = None
+                st.session_state.customer_name = ""
+                st.session_state.customer_category = ""
+                st.session_state.page = "home"
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.error("結案失敗，請稍後再試。")
+
     if messages and messages[-1]["role"] == "customer":
         st.info("⏳ 小老師正在為您研讀卦象，請稍候⋯⋯")
         st_autorefresh(interval=20000, key="chat_autorefresh")
@@ -935,6 +972,13 @@ def show_admin_reply():
             st.rerun()
         return
 
+    # Clear sessionStorage draft if a send/clear just happened
+    _draft_clear_sid = st.session_state.pop("_clear_reply_draft", None)
+    if _draft_clear_sid:
+        _components.html(f"""<script>
+window.parent.sessionStorage.removeItem('iching_draft_{_draft_clear_sid}');
+</script>""", height=0)
+
     category = sess["category"]
     info = CATEGORIES.get(category, {"icon": "☯", "desc": ""})
 
@@ -961,6 +1005,11 @@ def show_admin_reply():
 </div>""", unsafe_allow_html=True)
 
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
+
+    if pref:
+        _dup_count = count_sessions_by_phone(pref)
+        if _dup_count > 1:
+            st.warning(f"⚠️ 查詢密碼「{_html.escape(pref[:40])}」目前有 {_dup_count} 筆進行中問卦共用，查詢時只顯示最新一筆。")
 
     messages = get_messages(sid)
     if messages is None:
@@ -1012,11 +1061,45 @@ def show_admin_reply():
         key=f"reply_txt_{sid}_{st.session_state.reply_ver}",
         label_visibility="collapsed",
     )
+    _components.html(f"""<script>
+(function(){{
+  var ss = window.parent.sessionStorage;
+  var K = 'iching_draft_{sid}';
+  function findTA(){{
+    var all = window.parent.document.querySelectorAll('textarea');
+    for (var i=0;i<all.length;i++)
+      if (all[i].placeholder && all[i].placeholder.indexOf('易經卜卦解讀') !== -1) return all[i];
+    return null;
+  }}
+  var setup = false;
+  var iv = setInterval(function(){{
+    var t = findTA();
+    if (!t) return;
+    if (!setup){{
+      setup = true;
+      var saved = ss.getItem(K);
+      if (saved && !t.value.trim()){{
+        try{{
+          var ns = Object.getOwnPropertyDescriptor(
+            window.parent.HTMLTextAreaElement.prototype,'value').set;
+          ns.call(t, saved);
+          t.dispatchEvent(new Event('input',{{bubbles:true}}));
+        }}catch(e){{ t.value = saved; }}
+      }}
+      t.addEventListener('input', function(){{
+        t.value.trim() ? ss.setItem(K,t.value) : ss.removeItem(K);
+      }});
+    }}
+  }}, 200);
+  setTimeout(function(){{ clearInterval(iv); }}, 8000);
+}})();
+</script>""", height=0)
     r1, r2, r3, r4 = st.columns(4)
     with r1:
         if st.button("📤 發送解讀", use_container_width=True):
             if reply.strip():
                 if add_message(sid, "consultant", reply.strip()):
+                    st.session_state["_clear_reply_draft"] = sid
                     st.session_state.reply_ver += 1
                     st.rerun()
                 # else: error shown by add_message(), keep text so admin can retry
@@ -1024,6 +1107,7 @@ def show_admin_reply():
                 st.error("請輸入解讀內容")
     with r2:
         if st.button("🗑 清除輸入", use_container_width=True):
+            st.session_state["_clear_reply_draft"] = sid
             st.session_state.reply_ver += 1
             st.rerun()
     with r3:
@@ -1072,11 +1156,19 @@ def show_admin_archive():
 </span>
 </div>""", unsafe_allow_html=True)
 
+    arch_search = st.text_input(
+        "🔍 搜尋姓名", key="arch_name_search",
+        placeholder="輸入姓名篩選", label_visibility="collapsed",
+    )
+
     sessions = get_archived_sessions()
     if sessions is None:
         if st.button("🔄 重新整理", key="_arch_sessions_retry"):
             st.rerun()
         return
+
+    if arch_search:
+        sessions = [s for s in sessions if arch_search.lower() in (s["customer_name"] or "").lower()]
 
     st.markdown(f"**共 {len(sessions)} 筆歸檔**")
 
