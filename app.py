@@ -611,7 +611,9 @@ if (sid) {
         lookup_phone = st.text_input("輸入當時設定的查詢密碼", placeholder="您設定的查詢密碼", label_visibility="collapsed")
         if st.button("查詢記錄", use_container_width=True):
             phone_clean = lookup_phone.strip()
-            if phone_clean:
+            if not phone_clean:
+                st.error("請輸入查詢密碼")
+            else:
                 sess = get_session_by_phone(phone_clean)
                 if sess is _DB_ERROR:
                     st.error("⚠️ 資料庫暫時無法連線，請稍後再試。")
@@ -937,7 +939,8 @@ def show_admin_reply():
 
     cname_esc = _html.escape(sess["customer_name"])
     pref = sess.get("preference", "") or ""
-    pref_esc = _html.escape(pref)
+    pref_trunc = pref[:40] + ("…" if len(pref) > 40 else "")
+    pref_esc = _html.escape(pref_trunc)
     pref_display = f'<span style="font-family:monospace;background:#2D3B2A;color:#A0C870;padding:2px 8px;border-radius:4px;">{pref_esc}</span>' if pref else '<span style="color:#B8A070;font-style:italic;">（未設定）</span>'
     st.markdown(f"""<div class="chat-hdr">
 <span style="font-size:2rem;">{info["icon"]}</span>
@@ -973,10 +976,22 @@ def show_admin_reply():
     if sess["is_closed"]:
         st.info("🗄️ 此問卦已歸檔。")
         if st.button("🗑️ 刪除此記錄", use_container_width=True, key="del_closed"):
-            if delete_session(sid):
-                st.session_state.page = "admin_archive"
-                st.session_state.admin_reply_sid = None
-                st.rerun()
+            st.session_state[f"_del_confirm_{sid}"] = True
+            st.rerun()
+        if st.session_state.get(f"_del_confirm_{sid}"):
+            st.error("⚠️ 確定要永久刪除此歸檔記錄？此操作無法復原。")
+            cd1, cd2, _ = st.columns([1, 1, 2])
+            with cd1:
+                if st.button("✅ 確認刪除", key=f"_del_closed_yes_{sid}"):
+                    if delete_session(sid):
+                        st.session_state.pop(f"_del_confirm_{sid}", None)
+                        st.session_state.page = "admin_archive"
+                        st.session_state.admin_reply_sid = None
+                        st.rerun()
+            with cd2:
+                if st.button("❌ 取消", key=f"_del_closed_no_{sid}"):
+                    st.session_state.pop(f"_del_confirm_{sid}", None)
+                    st.rerun()
         return
 
     st.markdown("### ✍ 卜卦解讀回覆")
