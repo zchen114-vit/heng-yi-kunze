@@ -506,7 +506,7 @@ with st.sidebar:
 6. 複製那串 ID，填進 Streamlit Secrets：`line_user_id = "Uxxxxxxx"`""")
             else:
                 st.success("line_user_id ✅")
-                if st.button("📤 發送測試訊息", use_container_width=True):
+                if st.button("📤 發送測試訊息", use_container_width=True, disabled=not token):
                     try:
                         r = _req.post(
                             "https://api.line.me/v2/bot/message/push",
