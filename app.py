@@ -397,6 +397,26 @@ def set_announcement(text: str) -> bool:
         st.error(f"儲存失敗：{e}")
         return False
 
+def get_setting(key: str) -> str:
+    try:
+        data = _get("settings", {"key": f"eq.{key}", "select": "value"})
+        return (data[0].get("value") or "") if data else ""
+    except Exception:
+        return ""
+
+def set_setting(key: str, value: str) -> bool:
+    try:
+        r = _req.post(
+            f"{_base()}/settings",
+            headers=_headers({"Prefer": "resolution=merge-duplicates,return=minimal"}),
+            json={"key": key, "value": value},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
 def get_stats():
     try:
         rows = _enrich(_get("sessions", {"select": "*,messages(*)", "is_closed": "eq.false"}))
@@ -423,24 +443,34 @@ def _check_line_token(token: str):
         return None, str(e)
 
 def send_notification(name: str, category: str, question: str, sid: str, is_followup: bool = False):
+    """推播通知小老師。失敗時 retry 一次，並把原因寫進 settings，讓後台可見（不再靜默吞錯）。"""
     token   = st.secrets.get("line_token", "")
     user_id = st.secrets.get("line_user_id", "")
     if not token or not user_id:
-        return
-    try:
-        header = "【追加提問】" if is_followup else "【新問卦】"
-        text = f"{header}\n姓名：{name}\n分區：{category}\n編號：{sid}\n\n問題：\n{question[:200]}"
-        _req.post(
-            "https://api.line.me/v2/bot/message/push",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={"to": user_id, "messages": [{"type": "text", "text": text}]},
-            timeout=5,
-        )
-    except Exception:
-        pass
+        return False
+    header = "【追加提問】" if is_followup else "【新問卦】"
+    text = f"{header}\n姓名：{name}\n分區：{category}\n編號：{sid}\n\n問題：\n{question[:200]}"
+    payload = {"to": user_id, "messages": [{"type": "text", "text": text}]}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    last_err = ""
+    for attempt in range(2):  # 失敗時 retry 一次
+        try:
+            r = _req.post("https://api.line.me/v2/bot/message/push",
+                          headers=headers, json=payload, timeout=8)
+            if r.status_code == 200:
+                return True
+            last_err = f"{r.status_code}：{r.text[:120]}"
+            print(f"[send_notification] LINE push failed {last_err}")
+            if r.status_code != 429:  # 4xx（非額度問題）不必 retry
+                break
+        except Exception as e:
+            last_err = str(e)[:120]
+            print(f"[send_notification] LINE push exception: {last_err}")
+    # 記錄失敗原因供後台顯示
+    _ts = datetime.now(_TAIWAN).strftime("%m-%d %H:%M")
+    _hint = "（疑似每月推播額度用盡）" if last_err.startswith("429") else ""
+    set_setting("last_notify_error", f"{_ts} {('追加提問' if is_followup else '新問卦')} 推播失敗 {last_err}{_hint}")
+    return False
 
 # ── Session State Init ────────────────────────────────────────────────────────
 def init_state():
@@ -623,6 +653,15 @@ with st.sidebar:
                             st.error(f"LINE 錯誤 {r.status_code}：{r.text}")
                     except Exception as e:
                         st.error(f"發送失敗：{e}")
+
+            _nerr = get_setting("last_notify_error")
+            if _nerr:
+                st.warning(f"⚠️ 最近一次自動通知失敗：\n\n{_nerr}\n\n"
+                           "（顧客的問卦仍有存進系統，只是沒推播成功。若為 429 額度問題，"
+                           "可至 LINE Official Account Manager 查看本月推播用量。）")
+                if st.button("清除此提示", key="clr_notify_err", use_container_width=True):
+                    set_setting("last_notify_error", "")
+                    st.rerun()
     else:
         st.markdown("## ☯ 洞察易生的經歷")
         st.markdown("---")
