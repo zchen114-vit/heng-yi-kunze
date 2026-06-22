@@ -18,6 +18,7 @@ st.set_page_config(
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 _FALLBACK_PW = st.secrets.get("admin_password", "kunze2024")
+_LIFF_ID = st.secrets.get("liff_id", "")  # LINE LIFF App ID; 空字串時整段 LIFF 功能停用
 
 CATEGORIES = {
     "感情與人際": {
@@ -215,19 +216,46 @@ def _enrich(sessions):
         })
     return result
 
-def create_session(name: str, category: str, phone: str = ""):
+def create_session(name: str, category: str, phone: str = "", line_uid: str = ""):
     sid = str(uuid.uuid4())[:8].upper()
+    payload = {
+        "session_id": sid,
+        "customer_name": name,
+        "category": category,
+        "preference": phone.lower(),
+    }
+    if line_uid:
+        payload["line_uid"] = line_uid
     try:
-        _post("sessions", {
-            "session_id": sid,
-            "customer_name": name,
-            "category": category,
-            "preference": phone.lower(),
-        })
+        _post("sessions", payload)
         return sid
     except Exception as e:
+        # line_uid 欄位若尚未建立（migration 未跑），去掉它再試一次，確保問卦仍可送出
+        if line_uid:
+            try:
+                payload.pop("line_uid", None)
+                _post("sessions", payload)
+                return sid
+            except Exception as e2:
+                st.error(f"建立諮詢失敗：{e2}")
+                return None
         st.error(f"建立諮詢失敗：{e}")
         return None
+
+def get_open_session_by_line_uid(uid: str):
+    """LINE 用戶的免密碼自動登入：找此 LINE 帳號最新一筆未結案問卦。"""
+    if not uid:
+        return None
+    try:
+        data = _get("sessions", {
+            "line_uid": f"eq.{uid}",
+            "is_closed": "eq.false",
+            "order": "updated_at.desc",
+            "limit": "1",
+        })
+        return data[0] if data else None
+    except Exception:
+        return None  # 欄位不存在或 DB 異常 → 不自動登入，不報錯
 
 _DB_ERROR = object()  # sentinel: DB unreachable (distinct from "session not found")
 
@@ -425,6 +453,8 @@ def init_state():
         "customer_sid": None,
         "customer_name": "",
         "customer_category": "",
+        "line_uid": "",                 # 透過 LIFF 取得的 LINE userId（免密碼登入用）
+        "line_name": "",                # 透過 LIFF 取得的 LINE 顯示名稱（預填姓名用）
         "selected_cat": None,
         "reply_ver": 0,
         "admin_name_search": "",
@@ -461,6 +491,23 @@ def init_state():
             st.session_state.customer_name = sess["customer_name"] or ""
             st.session_state.customer_category = sess.get("category", "")
             st.session_state.page = "chat"
+
+    # LIFF 自動登入：圖文選單在 LINE 內開啟網頁時，前端 JS 會帶上 ?line_uid=&line_name=
+    if "line_uid" in params and not st.session_state.line_uid:
+        uid = params["line_uid"]
+        st.session_state.line_uid = uid
+        if "line_name" in params and not st.session_state.line_name:
+            st.session_state.line_name = params["line_name"]
+        # 尚未進入任何對話時，嘗試把此 LINE 帳號最新一筆未結案問卦帶出來（免密碼）
+        if st.session_state.customer_sid is None:
+            lsess = get_open_session_by_line_uid(uid)
+            if lsess:
+                st.session_state.customer_sid = lsess["session_id"]
+                st.session_state.customer_name = lsess["customer_name"] or ""
+                st.session_state.customer_category = lsess.get("category", "")
+                st.session_state.page = "chat"
+        # 消化掉 query string，避免重新整理時重複觸發（line_uid 已存入 session_state）
+        st.query_params.clear()
 
 init_state()
 
@@ -635,7 +682,49 @@ localStorage.removeItem('iching_sid');
         st.session_state["_db_unreachable"] = False
         st.session_state["_customer_self_closed"] = False
     elif not _db_down:
-        _components.html("""<script>
+        if _LIFF_ID and not st.session_state.line_uid:
+            # 在 LINE 圖文選單（LIFF）內開啟時：取得 LINE 身分 → 帶 line_uid 重導，免密碼登入。
+            # 在一般瀏覽器（非 LINE）開啟時：isInClient/isLoggedIn 皆 false → 退回原本的 localStorage 還原。
+            # SDK 注入到 parent（頂層 = LIFF 頁面）才能正確判斷 in-client 狀態。
+            _components.html(f"""<script>
+(function(){{
+  var pwin = window.parent, pdoc = window.parent.document;
+  function sidRedirect(){{
+    var sid = pwin.localStorage.getItem('iching_sid');
+    if (sid) {{
+      var url = new URL(pwin.location.href);
+      if (!url.searchParams.get('sid')) {{
+        url.searchParams.set('sid', sid);
+        pwin.location.href = url.toString();
+      }}
+    }}
+  }}
+  if (pwin.__iching_liff_started) return;
+  pwin.__iching_liff_started = true;
+  var s = pdoc.createElement('script');
+  s.src = 'https://static.line-scdn.net/liff/edge/2/sdk.js';
+  s.onload = function(){{
+    try {{
+      pwin.liff.init({{ liffId: '{_LIFF_ID}' }}).then(function(){{
+        if (pwin.liff.isInClient() || pwin.liff.isLoggedIn()) {{
+          pwin.liff.getProfile().then(function(p){{
+            var url = new URL(pwin.location.href);
+            if (!url.searchParams.get('line_uid')) {{
+              url.searchParams.set('line_uid', p.userId);
+              if (p.displayName) url.searchParams.set('line_name', p.displayName);
+              pwin.location.href = url.toString();
+            }}
+          }}).catch(sidRedirect);
+        }} else {{ sidRedirect(); }}
+      }}).catch(sidRedirect);
+    }} catch(e) {{ sidRedirect(); }}
+  }};
+  s.onerror = sidRedirect;
+  pdoc.head.appendChild(s);
+}})();
+</script>""", height=0)
+        else:
+            _components.html("""<script>
 const sid = localStorage.getItem('iching_sid');
 if (sid) {
     const url = new URL(window.parent.location.href);
@@ -738,9 +827,19 @@ def show_register():
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
     st.markdown(f'<div class="info-box">{info["welcome"]}</div>', unsafe_allow_html=True)
 
+    _via_line = bool(st.session_state.line_uid)
+    if _via_line:
+        st.caption("✅ 您已透過 LINE 登入，日後可直接從 LINE 選單回來查看回覆，免輸入密碼。")
+
     with st.form("register_form"):
-        name = st.text_input("您的姓名", placeholder="請輸入姓名")
-        phone = st.text_input("查詢密碼（選填，可用手機號、暱稱等任意文字）", placeholder="設定一個您記得住的查詢密碼")
+        name = st.text_input("您的姓名", value=st.session_state.line_name or "",
+                             placeholder="請輸入姓名")
+        if _via_line:
+            phone = st.text_input("查詢密碼（選填，LINE 用戶可留空）",
+                                  placeholder="留空即可，您可從 LINE 選單回來查看")
+        else:
+            phone = st.text_input("查詢密碼（選填，可用手機號、暱稱等任意文字）",
+                                  placeholder="設定一個您記得住的查詢密碼")
         question = st.text_area(
             "您的問題",
             placeholder="請輸入您想詢問的問題⋯⋯",
@@ -754,7 +853,8 @@ def show_register():
         elif not question.strip():
             st.error("請填寫問題")
         else:
-            sid = create_session(name.strip(), cat_name, phone.strip())
+            sid = create_session(name.strip(), cat_name, phone.strip(),
+                                 line_uid=st.session_state.line_uid)
             if not sid:
                 return
             if not add_message(sid, "customer", question.strip()):

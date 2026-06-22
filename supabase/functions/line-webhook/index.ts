@@ -55,10 +55,10 @@ async function replyLine(replyToken: string, text: string) {
 
 const VISITOR_REPLY = `您好！歡迎來到洞察易生的經歷 🌿
 
-如需易經諮詢，請前往網頁填寫問題：
-${APP_URL}
+請點選下方選單的「☯ 開始問卦」，
+即可直接在 LINE 裡填寫問題、查看小老師的解卦回覆，免註冊免密碼。
 
-📱 填寫姓名與問題後，小老師會為您解卦回覆。`;
+（若沒看到選單，請點輸入框旁的選單圖示展開）`;
 
 function fmtTime(iso: string): string {
   const d = new Date(iso);
@@ -193,9 +193,44 @@ serve(async (req) => {
   for (const evt of events) {
     if (evt.type !== "message" || evt.message?.type !== "text") continue;
 
-    // Non-admin visitor → auto-reply with web URL
+    // Non-admin visitor → 若此 LINE 帳號有進行中問卦，把留言存進去並通知小老師
     if (evt.source?.userId !== ADMIN_USER_ID) {
-      if (evt.replyToken) await replyLine(evt.replyToken, VISITOR_REPLY);
+      const uid = evt.source?.userId;
+      let handled = false;
+      if (uid) {
+        const { data: sess } = await supabase
+          .from("sessions")
+          .select("session_id, customer_name, category")
+          .eq("line_uid", uid)
+          .eq("is_closed", false)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (sess) {
+          const text = (evt.message.text as string).trim();
+          await supabase.from("messages").insert({
+            session_id: sess.session_id,
+            role: "customer",
+            content: text,
+            created_at: new Date().toISOString(),
+          });
+          await supabase
+            .from("sessions")
+            .update({ updated_at: new Date().toISOString() })
+            .eq("session_id", sess.session_id);
+          await pushLine(
+            `【追加提問】\n姓名：${sess.customer_name ?? "？"}\n分區：${sess.category}\n編號：${sess.session_id}\n\n問題：\n${text.slice(0, 200)}`,
+          );
+          if (evt.replyToken) {
+            await replyLine(
+              evt.replyToken,
+              "已收到您的提問 🌿 小老師會盡快為您解卦，可點下方選單「📖 我的回覆」查看進度。",
+            );
+          }
+          handled = true;
+        }
+      }
+      if (!handled && evt.replyToken) await replyLine(evt.replyToken, VISITOR_REPLY);
       continue;
     }
 
