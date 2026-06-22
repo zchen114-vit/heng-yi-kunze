@@ -348,6 +348,22 @@ def set_admin_password(new_pw: str) -> bool:
         st.error(f"無法更新密碼：{e}")
         return False
 
+def get_announcement() -> str:
+    try:
+        data = _get("settings", {"key": "eq.announcement", "select": "value"})
+        return (data[0].get("value") or "") if data else ""
+    except Exception:
+        return ""
+
+def set_announcement(text: str) -> bool:
+    try:
+        _post("settings", {"key": "announcement", "value": text},
+              {"Prefer": "resolution=merge-duplicates,return=minimal"})
+        return True
+    except Exception as e:
+        st.error(f"儲存失敗：{e}")
+        return False
+
 def get_stats():
     try:
         rows = _enrich(_get("sessions", {"select": "*,messages(*)", "is_closed": "eq.false"}))
@@ -499,6 +515,24 @@ with st.sidebar:
                     if set_admin_password(new_pw):
                         st.success("密碼已更新")
 
+        with st.expander("📢 跑馬燈公告"):
+            _cur_ann = get_announcement()
+            _ann_input = st.text_area("公告內容", value=_cur_ann,
+                                      placeholder="留空表示不顯示公告",
+                                      height=80, key="ann_input",
+                                      label_visibility="collapsed")
+            _ac1, _ac2 = st.columns(2)
+            with _ac1:
+                if st.button("儲存", use_container_width=True, key="ann_save"):
+                    if set_announcement(_ann_input.strip()):
+                        st.success("已更新")
+                        st.rerun()
+            with _ac2:
+                if st.button("清除", use_container_width=True, key="ann_clear"):
+                    if set_announcement(""):
+                        st.success("已清除")
+                        st.rerun()
+
         with st.expander("💬 LINE 通知設定"):
             token = st.secrets.get("line_token", "")
             user_id = st.secrets.get("line_user_id", "")
@@ -611,6 +645,15 @@ if (sid) {
         '<div class="main-subtitle">靜心一問，易理自明 · 天地人和，坤澤長流</div>',
         unsafe_allow_html=True,
     )
+    _ann = get_announcement()
+    if _ann:
+        _ann_esc = _html.escape(_ann)
+        st.markdown(f"""<div style="overflow:hidden;background:linear-gradient(90deg,#2A1F0A,#3D2E0D,#2A1F0A);border:1px solid #7A5C3A;border-radius:8px;padding:10px 0;margin:10px 0;">
+<span style="display:inline-block;white-space:nowrap;animation:marquee-scroll 22s linear infinite;color:#F0D080;font-size:0.95rem;padding:0 30px;">
+📢 &nbsp;{_ann_esc}</span></div>
+<style>@keyframes marquee-scroll{{
+  0%{{transform:translateX(100vw)}} 100%{{transform:translateX(-100%)}}}}</style>""",
+        unsafe_allow_html=True)
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
     if _self_closed:
         st.success("🙏 感謝您的諮詢！若有新的問題，歡迎重新選擇分區問卦。")
