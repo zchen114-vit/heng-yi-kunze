@@ -968,6 +968,14 @@ localStorage.setItem('iching_email', '{em}');
 </script>""", height=0)
                             st.success("✅ 登入成功！您目前沒有進行中的問卦，請於下方選擇分區開始提問。")
             st.caption("輸入 Email 收驗證碼即可登入，日後回來免再輸入；小老師回覆時也會寄信通知您。")
+    else:
+        # 診斷行（新版才有）：看得到這行 = 新程式已上線；看不到 = 還在跑舊程式。
+        _have_from = bool(st.secrets.get("email_from", ""))
+        _have_pw   = bool(st.secrets.get("gmail_app_password", ""))
+        st.caption(
+            f"🔧 Email 功能未啟用 — email_from: {'✓' if _have_from else '✗ 缺'}、"
+            f"gmail_app_password: {'✓' if _have_pw else '✗ 缺'}。兩個都要填好才會出現登入框。"
+        )
 
     with st.expander("📱 查詢我的諮詢記錄"):
         lookup_phone = st.text_input("輸入當時設定的查詢密碼", placeholder="您設定的查詢密碼", label_visibility="collapsed")
