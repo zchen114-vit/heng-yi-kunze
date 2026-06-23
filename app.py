@@ -6,6 +6,10 @@ import random
 import re
 import requests as _req
 import html as _html
+import smtplib
+from email.mime.text import MIMEText
+from email.header import Header
+from email.utils import formataddr
 from datetime import datetime, timezone, timedelta
 from streamlit_autorefresh import st_autorefresh
 
@@ -24,7 +28,7 @@ _FALLBACK_PW = st.secrets.get("admin_password", "kunze2024")
 _LIFF_ID = st.secrets.get("liff_id", "")  # LINE LIFF App ID; 空字串時整段 LIFF 功能停用
 _APP_URL = st.secrets.get("app_url", "https://heng-yi-kunze.streamlit.app").rstrip("/")
 def _email_enabled() -> bool:
-    return bool(st.secrets.get("brevo_api_key", "") and st.secrets.get("email_from", ""))
+    return bool(st.secrets.get("email_from", "") and st.secrets.get("gmail_app_password", ""))
 
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
@@ -506,30 +510,25 @@ def _gen_code() -> str:
     return f"{random.randint(0, 999999):06d}"
 
 def send_email(to_addr: str, subject: str, html: str) -> bool:
-    """透過 Brevo HTTP API 寄信（不需自有網域，驗證單一寄件 email 即可）。
-    未設定 brevo_api_key / email_from 時直接停用，不報錯。"""
-    key    = st.secrets.get("brevo_api_key", "")
+    """透過 Gmail SMTP 寄信（用寄件人自己的 Gmail + 應用程式密碼，免註冊第三方服務）。
+    需 secrets: email_from（你的 Gmail）+ gmail_app_password（16 碼應用程式密碼）。
+    未設定 / 寄送失敗時回 False，不丟例外、不影響呼叫端。"""
     sender = st.secrets.get("email_from", "")
-    if not key or not sender or not to_addr:
+    pw     = st.secrets.get("gmail_app_password", "")
+    if not sender or not pw or not to_addr:
         return False
     try:
-        r = _req.post(
-            "https://api.brevo.com/v3/smtp/email",
-            headers={"api-key": key, "Content-Type": "application/json", "accept": "application/json"},
-            json={
-                "sender": {"name": "洞察易生的經歷", "email": sender},
-                "to": [{"email": to_addr}],
-                "subject": subject,
-                "htmlContent": html,
-            },
-            timeout=10,
-        )
-        if r.status_code in (200, 201):
-            return True
-        print(f"[send_email] Brevo failed {r.status_code}: {r.text[:200]}")
-        return False
+        msg = MIMEText(html, "html", "utf-8")
+        msg["Subject"] = Header(subject, "utf-8")
+        msg["From"]    = formataddr((str(Header("洞察易生的經歷", "utf-8")), sender))
+        msg["To"]      = to_addr
+        # 應用程式密碼 Google 顯示時帶空格（"abcd efgh ..."），去掉空格較不易出錯
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as s:
+            s.login(sender, pw.replace(" ", ""))
+            s.sendmail(sender, [to_addr], msg.as_string())
+        return True
     except Exception as e:
-        print(f"[send_email] exception: {e}")
+        print(f"[send_email] Gmail SMTP failed: {e}")
         return False
 
 def notify_customer_reply_email(sid: str) -> None:
