@@ -27,7 +27,7 @@ st.set_page_config(
 # ── Constants ─────────────────────────────────────────────────────────────────
 _FALLBACK_PW = st.secrets.get("admin_password", "kunze2024")
 _LIFF_ID = st.secrets.get("liff_id", "")  # LINE LIFF App ID; 空字串時整段 LIFF 功能停用
-_APP_URL = st.secrets.get("app_url", "https://heng-yi-kunze.streamlit.app").rstrip("/")
+_APP_URL = st.secrets.get("app_url", "https://iching-insight.streamlit.app").rstrip("/")
 def _email_enabled() -> bool:
     return bool(st.secrets.get("email_from", "") and st.secrets.get("gmail_app_password", ""))
 
@@ -298,6 +298,21 @@ def get_open_session_by_email(email: str):
         return data[0] if data else None
     except Exception:
         return None  # 欄位不存在或 DB 異常 → 不自動登入，不報錯
+
+def find_my_open_session():
+    """依目前登入身分（email / LINE）找此顧客最新一筆未結案問卦，找不到回 None。
+    給「全新問問題」頁面顯示『切換回進行中對話』入口用。"""
+    em = st.session_state.get("email", "")
+    if em:
+        s = get_open_session_by_email(em)
+        if s:
+            return s
+    uid = st.session_state.get("line_uid", "")
+    if uid:
+        s = get_open_session_by_line_uid(uid)
+        if s:
+            return s
+    return None
 
 _DB_ERROR = object()  # sentinel: DB unreachable (distinct from "session not found")
 
@@ -1083,6 +1098,12 @@ def show_register():
 
     info = CATEGORIES[cat_name]
 
+    # 待修二：全新問問題頁也要能回首頁
+    if st.button("← 返回首頁", key="reg_back_home"):
+        st.session_state.page = "home"
+        st.session_state.selected_cat = None
+        st.rerun()
+
     st.markdown(f"""<div class="chat-hdr">
 <span style="font-size:2rem;">{info["icon"]}</span>
 <span>
@@ -1100,6 +1121,21 @@ def show_register():
         st.caption("✅ 您已透過 LINE 登入，日後可直接從 LINE 選單回來查看回覆，免輸入密碼。")
     elif _via_email:
         st.caption(f"✅ 您已用 Email（{st.session_state.email}）登入，小老師回覆時會寄信通知您，日後回來免再輸入。")
+
+    # 待修一：若此顧客已有一則進行中（未結案）的諮詢，提供入口直接切回該對話聊天室，
+    # 避免登入後只看到「全新問問題」介面、找不到原本跟小老師的對話。
+    _open = find_my_open_session()
+    if _open and _open.get("session_id") != st.session_state.get("customer_sid"):
+        _ocat = _open.get("category", "")
+        st.info(f"💬 您有一則進行中的諮詢（{_ocat}），小老師的回覆都在那裡。")
+        if st.button("→ 回到我進行中的諮詢、查看回覆", key="reg_resume_open",
+                     use_container_width=True):
+            st.session_state.customer_sid = _open["session_id"]
+            st.session_state.customer_name = _open.get("customer_name") or ""
+            st.session_state.customer_category = _ocat
+            st.session_state.page = "chat"
+            st.rerun()
+        st.caption("若您是要問一個全新的問題，請繼續往下填寫；想看舊問題的回覆請點上方按鈕。")
 
     with st.form("register_form"):
         name = st.text_input("您的姓名",
