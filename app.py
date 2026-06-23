@@ -31,6 +31,13 @@ _APP_URL = st.secrets.get("app_url", "https://heng-yi-kunze.streamlit.app").rstr
 def _email_enabled() -> bool:
     return bool(st.secrets.get("email_from", "") and st.secrets.get("gmail_app_password", ""))
 
+def _google_enabled() -> bool:
+    # secrets 有 [auth] 區塊（client_id/secret 等）才啟用 Google 登入；沒設定時整段停用、不影響現有登入。
+    try:
+        return bool(st.secrets.get("auth", None))
+    except Exception:
+        return False
+
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 def _valid_email(s: str) -> bool:
@@ -905,6 +912,41 @@ localStorage.removeItem('iching_sid');
 　選擇分區後填寫姓名與問題，靜候小老師為您解卦。
 </div>""", unsafe_allow_html=True)
 
+    if _google_enabled():
+        if st.user.is_logged_in:
+            gem = (getattr(st.user, "email", "") or "").strip().lower()
+            if gem and _valid_email(gem):
+                st.session_state.email = gem
+                gname = (getattr(st.user, "name", "") or "").strip()
+                if gname:
+                    st.session_state["name_prefill"] = gname
+                gsess = get_open_session_by_email(gem)
+                if gsess:
+                    fsid = gsess["session_id"]
+                    st.session_state.customer_sid = fsid
+                    st.session_state.customer_name = gsess["customer_name"] or gname
+                    st.session_state.customer_category = gsess.get("category", "")
+                    st.session_state.page = "chat"
+                    _components.html(f"""<script>
+localStorage.setItem('iching_email', '{gem}');
+localStorage.setItem('iching_sid', '{fsid}');
+window.parent.location.href = '?sid={fsid}';
+</script>""", height=0)
+                    st.stop()
+                else:
+                    _components.html(f"""<script>
+localStorage.setItem('iching_email', '{gem}');
+</script>""", height=0)
+                    st.success(f"✅ 已用 Google 登入（{gem}）！您目前沒有進行中的問卦，請於下方選擇分區開始提問。")
+                    st.button("登出 Google", on_click=st.logout, key="g_logout")
+            else:
+                st.warning("Google 登入未取得 Email，請改用下方 Email 登入。")
+                st.button("登出 Google", on_click=st.logout, key="g_logout_noemail")
+        else:
+            st.button("🔵 用 Google 帳號登入 / 註冊（最快，免記密碼）",
+                      use_container_width=True, on_click=st.login, key="g_login")
+            st.caption("用 Google 一鍵登入，免設密碼；登入後小老師回覆會寄信通知您，日後回來自動登入。")
+
     if _email_enabled():
         with st.expander("📧 用 Email 登入 / 查詢（免記密碼，推薦）", expanded=False):
             em_in = st.text_input("您的 Email", key="email_login_addr",
@@ -1060,7 +1102,8 @@ def show_register():
         st.caption(f"✅ 您已用 Email（{st.session_state.email}）登入，小老師回覆時會寄信通知您，日後回來免再輸入。")
 
     with st.form("register_form"):
-        name = st.text_input("您的姓名", value=st.session_state.line_name or "",
+        name = st.text_input("您的姓名",
+                             value=st.session_state.line_name or st.session_state.get("name_prefill", "") or "",
                              placeholder="請輸入姓名")
         if _via_line:
             phone = st.text_input("查詢密碼（選填，LINE 用戶可留空）",
