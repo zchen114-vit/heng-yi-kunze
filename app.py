@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-_FALLBACK_PW = st.secrets.get("admin_password", "kunze2024")
+_FALLBACK_PW = st.secrets.get("admin_password", "")  # 不再硬編碼預設密碼（原 kunze2024 寫在公開原始碼=任何人可登入後台）
 _LIFF_ID = st.secrets.get("liff_id", "")  # LINE LIFF App ID; 空字串時整段 LIFF 功能停用
 _APP_URL = st.secrets.get("app_url", "https://iching-insight.streamlit.app").rstrip("/")
 def _email_enabled() -> bool:
@@ -256,32 +256,57 @@ def _enrich(sessions):
     return result
 
 def create_session(name: str, category: str, line_uid: str = "", email: str = ""):
+    """建立問卦，回傳 (session_id, token)。token 是猜不到的隨機字串，是日後回來查看的唯一鑰匙。
+    失敗回 (None, None)；若 DB 欄位尚未建立則退而求其次仍送出，但 token 回空字串。"""
     sid = str(uuid.uuid4())[:8].upper()
-    base = {
+    token = _secrets.token_urlsafe(32)
+    payload = {
         "session_id": sid,
         "customer_name": name,
         "category": category,
-        "preference": "",  # 查詢密碼功能已移除，改用 Email／Google／LINE 身分登入；此欄保留空字串相容舊資料表
+        "preference": "",  # 查詢密碼功能已移除；此欄保留空字串相容舊資料表
+        "token": token,
     }
-    extra = {}
     if line_uid:
-        extra["line_uid"] = line_uid
+        payload["line_uid"] = line_uid
     if email:
-        extra["email"] = email.lower()
+        payload["email"] = email.lower()
     try:
-        _post("sessions", {**base, **extra})
-        return sid
-    except Exception as e:
-        # line_uid / email 欄位若尚未建立（migration 未跑），去掉選填欄位再試，確保問卦仍可送出
-        if extra:
-            try:
-                _post("sessions", base)
-                return sid
-            except Exception as e2:
-                st.error(f"建立諮詢失敗：{e2}")
-                return None
-        st.error(f"建立諮詢失敗：{e}")
+        _post("sessions", payload)
+        return sid, token
+    except Exception:
+        # token / line_uid / email 欄位若尚未建立（migration 未跑），去掉選填欄位再試，確保問卦仍可送出
+        minimal = {"session_id": sid, "customer_name": name, "category": category, "preference": ""}
+        try:
+            _post("sessions", minimal)
+            return sid, ""  # 無 token：本次仍可問卦，只是這台裝置日後無法用 token 自動回登
+        except Exception as e:
+            st.error(f"建立諮詢失敗：{e}")
+            return None, None
+
+def get_session_by_token(token: str):
+    """用 token（猜不到的隨機鑰匙）找未結案的問卦。這是唯一安全的「回來查看」入口。"""
+    if not token:
         return None
+    try:
+        data = _get("sessions", {"token": _eqv(token), "is_closed": "eq.false", "limit": "1"})
+        return data[0] if data else None
+    except Exception:
+        return _DB_ERROR
+
+def _ensure_token(sess) -> str:
+    """回傳此 session 的 token；舊資料若沒有就現補一個並寫回 DB。失敗回空字串。"""
+    if not sess:
+        return ""
+    tok = (sess.get("token") or "").strip()
+    if tok:
+        return tok
+    tok = _secrets.token_urlsafe(32)
+    try:
+        _patch("sessions", {"token": tok}, {"session_id": _eqv(sess["session_id"])})
+        return tok
+    except Exception:
+        return ""
 
 def get_open_session_by_line_uid(uid: str):
     """LINE 用戶的免密碼自動登入：找此 LINE 帳號最新一筆未結案問卦。"""
@@ -560,7 +585,9 @@ def notify_customer_reply_email(sid: str) -> None:
     if not to_addr:
         return
     name = _html.escape(sess.get("customer_name") or "您")
-    link = f"{_APP_URL}/?email={quote(to_addr)}"  # quote：plus 地址的 + 不會被解成空格，回登連結才不會失效
+    # 用 token 當回登連結（猜不到、只開得了這一筆），取代舊的 ?email=（可被任何人偽造）
+    tok = _ensure_token(sess)
+    link = f"{_APP_URL}/?token={quote(tok)}" if tok else _APP_URL
     send_email(
         to_addr,
         "小老師回覆了您的問卦 · 洞察易生的經歷",
@@ -627,55 +654,27 @@ def init_state():
     # 交給 Streamlit 內建 auth 完成交握，避免把 callback 參數清掉造成 500。
     if "code" in params or "state" in params:
         return
-    if "sid" in params and st.session_state.customer_sid is None:
-        sid = params["sid"]
-        sess = get_session(sid)
+
+    # 自動回登只認 ?token=（猜不到的隨機鑰匙）。
+    # 已移除 ?sid= / ?email= / ?line_uid=——那些可被任何人手打網址偽造成別人身分（帳號接管漏洞）。
+    if "token" in params and st.session_state.customer_sid is None:
+        sess = get_session_by_token(params["token"])
         if sess is _DB_ERROR:
-            # DB temporarily unreachable — clear URL but keep localStorage intact
+            # DB 暫時不可用 — 清掉網址但保留 localStorage
             st.query_params.clear()
             st.session_state["_db_unreachable"] = True
-        elif sess is None:
-            # Session genuinely not found (deleted or never existed) — clear everything
-            st.query_params.clear()
-            st.session_state["_clear_storage"] = True
-        elif sess["is_closed"]:
+        elif not sess:
+            # token 無效／該問卦已結案或被刪 — 清掉一切
             st.query_params.clear()
             st.session_state["_clear_storage"] = True
         else:
-            st.session_state.customer_sid = sid
+            st.session_state.customer_sid = sess["session_id"]
             st.session_state.customer_name = sess["customer_name"] or ""
             st.session_state.customer_category = sess.get("category", "")
+            # token 已證明此人擁有這筆問卦，綁定的 email 可安全記住（供回覆通知等用）
+            if sess.get("email"):
+                st.session_state.email = (sess.get("email") or "").lower()
             st.session_state.page = "chat"
-
-    # LIFF 自動登入：圖文選單在 LINE 內開啟網頁時，前端 JS 會帶上 ?line_uid=&line_name=
-    if "line_uid" in params and not st.session_state.line_uid:
-        uid = params["line_uid"]
-        st.session_state.line_uid = uid
-        if "line_name" in params and not st.session_state.line_name:
-            st.session_state.line_name = params["line_name"]
-        # 尚未進入任何對話時，嘗試把此 LINE 帳號最新一筆未結案問卦帶出來（免密碼）
-        if st.session_state.customer_sid is None:
-            lsess = get_open_session_by_line_uid(uid)
-            if lsess:
-                st.session_state.customer_sid = lsess["session_id"]
-                st.session_state.customer_name = lsess["customer_name"] or ""
-                st.session_state.customer_category = lsess.get("category", "")
-                st.session_state.page = "chat"
-        # 消化掉 query string，避免重新整理時重複觸發（line_uid 已存入 session_state）
-        st.query_params.clear()
-
-    # Email 自動回登：localStorage 存了已驗證 email 時，前端 JS 會帶上 ?email=
-    if "email" in params and not st.session_state.email and _valid_email(params["email"]):
-        em = params["email"].strip().lower()
-        st.session_state.email = em
-        if st.session_state.customer_sid is None:
-            esess = get_open_session_by_email(em)
-            if esess:
-                st.session_state.customer_sid = esess["session_id"]
-                st.session_state.customer_name = esess["customer_name"] or ""
-                st.session_state.customer_category = esess.get("category", "")
-                st.session_state.page = "chat"
-        st.query_params.clear()
 
 init_state()
 
@@ -839,15 +838,29 @@ with st.sidebar:
         with st.expander("🔐 管理入口"):
             pw = st.text_input("管理密碼", type="password", key="admin_pw")
             if st.button("進入管理後台", use_container_width=True):
+                _lock_until = st.session_state.get("_admin_lock_until", 0)
                 _cur_pw = get_admin_password()
-                if _cur_pw is None:
+                if time.time() < _lock_until:
+                    st.error(f"嘗試過多，請於 {int(_lock_until - time.time()) + 1} 秒後再試。")
+                elif _cur_pw is None:
                     st.error("⚠️ 資料庫暫時無法連線，請稍後再試。")
+                elif not _cur_pw:
+                    st.error("尚未設定管理密碼，請於 Secrets 設定 admin_password。")
                 elif pw and hmac.compare_digest(pw.encode("utf-8"), _cur_pw.encode("utf-8")):
+                    st.session_state["_admin_fail"] = 0
                     st.session_state.admin_mode = True
                     st.session_state.page = "admin"
                     st.rerun()
                 else:
-                    st.error("密碼錯誤")
+                    # 連錯 5 次鎖 60 秒，拖慢暴力破解（伺服器級限流仍建議另做）
+                    _fail = st.session_state.get("_admin_fail", 0) + 1
+                    st.session_state["_admin_fail"] = _fail
+                    if _fail >= 5:
+                        st.session_state["_admin_lock_until"] = time.time() + 60
+                        st.session_state["_admin_fail"] = 0
+                        st.error("錯誤次數過多，已暫時鎖定 60 秒。")
+                    else:
+                        st.error(f"密碼錯誤（剩 {5 - _fail} 次）")
 
 # ── Customer: Home ────────────────────────────────────────────────────────────
 def show_home():
@@ -856,64 +869,28 @@ def show_home():
     _db_down      = st.session_state.get("_db_unreachable", False)
     _self_closed  = st.session_state.get("_customer_self_closed", False)
     if _show_clear or _quiet_clear:
+        # 清掉所有 localStorage 鍵（含已淘汰、不安全的 iching_sid / iching_email）
         _components.html("""<script>
+localStorage.removeItem('iching_token');
 localStorage.removeItem('iching_sid');
+localStorage.removeItem('iching_email');
 </script>""", height=0)
         st.session_state["_clear_storage"] = False
         st.session_state["_clear_storage_quiet"] = False
         st.session_state["_db_unreachable"] = False
         st.session_state["_customer_self_closed"] = False
     elif not _db_down:
-        if _LIFF_ID and not st.session_state.line_uid:
-            # 在 LINE 圖文選單（LIFF）內開啟時：取得 LINE 身分 → 帶 line_uid 重導，免密碼登入。
-            # 在一般瀏覽器（非 LINE）開啟時：isInClient/isLoggedIn 皆 false → 退回原本的 localStorage 還原。
-            # SDK 注入到 parent（頂層 = LIFF 頁面）才能正確判斷 in-client 狀態。
-            _components.html(f"""<script>
-(function(){{
-  var pwin = window.parent, pdoc = window.parent.document;
-  function sidRedirect(){{
-    var url = new URL(pwin.location.href);
-    if (url.searchParams.get('sid') || url.searchParams.get('email')) return;
-    if (url.searchParams.get('code') || url.searchParams.get('state')) return; // OAuth callback 進行中，勿覆蓋
-    var sid = pwin.localStorage.getItem('iching_sid');
-    if (sid) {{ url.searchParams.set('sid', sid); pwin.location.href = url.toString(); return; }}
-    var em = pwin.localStorage.getItem('iching_email');
-    if (em) {{ url.searchParams.set('email', em); pwin.location.href = url.toString(); }}
-  }}
-  if (pwin.__iching_liff_started) return;
-  pwin.__iching_liff_started = true;
-  var s = pdoc.createElement('script');
-  s.src = 'https://static.line-scdn.net/liff/edge/2/sdk.js';
-  s.onload = function(){{
-    try {{
-      pwin.liff.init({{ liffId: '{_LIFF_ID}' }}).then(function(){{
-        if (pwin.liff.isInClient() || pwin.liff.isLoggedIn()) {{
-          pwin.liff.getProfile().then(function(p){{
-            var url = new URL(pwin.location.href);
-            if (!url.searchParams.get('line_uid')) {{
-              url.searchParams.set('line_uid', p.userId);
-              if (p.displayName) url.searchParams.set('line_name', p.displayName);
-              pwin.location.href = url.toString();
-            }}
-          }}).catch(sidRedirect);
-        }} else {{ sidRedirect(); }}
-      }}).catch(sidRedirect);
-    }} catch(e) {{ sidRedirect(); }}
-  }};
-  s.onerror = sidRedirect;
-  pdoc.head.appendChild(s);
-}})();
-</script>""", height=0)
-        else:
-            _components.html("""<script>
+        # 自動回登：localStorage 若存有 token，就用 ?token= 重導回該問卦（token 猜不到，安全）。
+        # 順手清掉舊版不安全的 iching_sid / iching_email（升級用戶用過一次就乾淨了）。
+        _components.html("""<script>
 (function(){
   const url = new URL(window.parent.location.href);
-  if (url.searchParams.get('sid') || url.searchParams.get('email')) return;
+  if (url.searchParams.get('token')) return;
   if (url.searchParams.get('code') || url.searchParams.get('state')) return; // OAuth callback 進行中，勿覆蓋
-  const sid = localStorage.getItem('iching_sid');
-  if (sid) { url.searchParams.set('sid', sid); window.parent.location.href = url.toString(); return; }
-  const em = localStorage.getItem('iching_email');
-  if (em) { url.searchParams.set('email', em); window.parent.location.href = url.toString(); }
+  localStorage.removeItem('iching_sid');
+  localStorage.removeItem('iching_email');
+  const tok = localStorage.getItem('iching_token');
+  if (tok) { url.searchParams.set('token', tok); window.parent.location.href = url.toString(); }
 })();
 </script>""", height=0)
     st.markdown('<div class="main-title">洞察易生的經歷</div>', unsafe_allow_html=True)
@@ -956,23 +933,23 @@ localStorage.removeItem('iching_sid');
                 gname = (getattr(st.user, "name", "") or "").strip()
                 if gname:
                     st.session_state["name_prefill"] = gname
+                # email 由 Google 驗證過，依此身分找進行中問卦是安全的（非 URL 來的偽造身分）
                 gsess = get_open_session_by_email(gem)
                 if gsess:
-                    fsid = gsess["session_id"]
-                    st.session_state.customer_sid = fsid
+                    st.session_state.customer_sid = gsess["session_id"]
                     st.session_state.customer_name = gsess["customer_name"] or gname
                     st.session_state.customer_category = gsess.get("category", "")
                     st.session_state.page = "chat"
-                    _components.html(f"""<script>
-localStorage.setItem('iching_email', '{gem}');
-localStorage.setItem('iching_sid', '{fsid}');
-window.parent.location.href = '?sid={fsid}';
+                    _gtok = _ensure_token(gsess)
+                    if _gtok:
+                        _components.html(f"""<script>
+localStorage.setItem('iching_token', '{_gtok}');
+window.parent.location.href = '?token={_gtok}';
 </script>""", height=0)
-                    st.stop()
+                        st.stop()
+                    else:
+                        st.rerun()
                 else:
-                    _components.html(f"""<script>
-localStorage.setItem('iching_email', '{gem}');
-</script>""", height=0)
                     st.success(f"✅ 已用 Google 登入（{gem}）！您目前沒有進行中的問卦，請於下方選擇分區開始提問。")
                     st.button("登出 Google", on_click=st.logout, key="g_logout")
             else:
@@ -1045,25 +1022,25 @@ localStorage.setItem('iching_email', '{gem}');
                         for _k in ("_email_code", "_email_code_addr", "_email_code_exp",
                                    "_email_code_tries", "_email_code_sent"):
                             st.session_state.pop(_k, None)
+                        # email 剛通過驗證碼，依此身分找進行中問卦是安全的
                         esess = get_open_session_by_email(em)
                         if esess:
-                            fsid = esess["session_id"]
-                            st.session_state.customer_sid = fsid
+                            st.session_state.customer_sid = esess["session_id"]
                             st.session_state.customer_name = esess["customer_name"] or ""
                             st.session_state.customer_category = esess.get("category", "")
                             st.session_state.page = "chat"
-                            _components.html(f"""<script>
-localStorage.setItem('iching_email', '{em}');
-localStorage.setItem('iching_sid', '{fsid}');
-window.parent.location.href = '?sid={fsid}';
+                            _etok = _ensure_token(esess)
+                            if _etok:
+                                _components.html(f"""<script>
+localStorage.setItem('iching_token', '{_etok}');
+window.parent.location.href = '?token={_etok}';
 </script>""", height=0)
-                            st.stop()
+                                st.stop()
+                            else:
+                                st.rerun()
                         else:
-                            _components.html(f"""<script>
-localStorage.setItem('iching_email', '{em}');
-</script>""", height=0)
                             st.success("✅ 登入成功！您目前沒有進行中的問卦，請於下方選擇分區開始提問。")
-            st.caption("輸入 Email 收驗證碼即可登入，日後回來免再輸入；小老師回覆時也會寄信通知您。")
+            st.caption("輸入 Email 收驗證碼即可登入；小老師回覆時會寄信通知您，點信中連結即可回來查看。")
     else:
         # 診斷行（新版才有）：看得到這行 = 新程式已上線；看不到 = 還在跑舊程式。
         _have_from = bool(st.secrets.get("email_from", ""))
@@ -1183,22 +1160,30 @@ def show_register():
         elif not question.strip():
             st.error("請填寫問題")
         else:
-            sid = create_session(name.strip(), cat_name,
-                                 line_uid=st.session_state.line_uid,
-                                 email=st.session_state.email)
+            sid, token = create_session(name.strip(), cat_name,
+                                        line_uid=st.session_state.line_uid,
+                                        email=st.session_state.email)
             if not sid:
                 return
             if not add_message(sid, "customer", question.strip()):
                 delete_session(sid)  # remove orphaned session
                 return
             st.session_state.pop("name_prefill", None)  # 用過即清，避免殘留預填到別人/別次
-            st.success("問卦已送出，正在跳轉⋯⋯")
+            st.session_state.customer_sid = sid
+            st.session_state.customer_name = name.strip()
+            st.session_state.customer_category = cat_name
+            st.session_state.page = "chat"
             send_notification(name.strip(), cat_name, question.strip(), sid)
-            _components.html(f"""<script>
-localStorage.setItem('iching_sid', '{sid}');
-window.parent.location.href = '?sid={sid}';
+            st.success("問卦已送出，正在跳轉⋯⋯")
+            if token:
+                # 把 token 存進這台裝置，日後回來自動帶回這筆問卦（token 猜不到，安全）
+                _components.html(f"""<script>
+localStorage.setItem('iching_token', '{token}');
+window.parent.location.href = '?token={token}';
 </script>""", height=0)
-            st.stop()
+                st.stop()
+            else:
+                st.rerun()
 
 # ── Customer: Chat ────────────────────────────────────────────────────────────
 def show_chat():
