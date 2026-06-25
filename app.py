@@ -203,12 +203,14 @@ def _base():
     return st.secrets.get("supabase_url", "").rstrip("/") + "/rest/v1"
 
 def _eqv(value: str) -> str:
-    """把使用者輸入包成 PostgREST 的 eq 過濾值並加雙引號跳脫。
-    不跳脫時，值裡的逗號／括號／點會被 PostgREST 解析成額外的過濾運算子，
-    可被用來竄改查詢語意（例：preference=1,is_closed.eq.false）。"""
-    v = str(value)
-    v = v.replace("\\", "\\\\").replace('"', '\\"')
-    return f'eq."{v}"'
+    """安全的 PostgREST eq 過濾值（白名單清洗，不加雙引號）。
+    合法業務值（session_id／token／email／line_uid）只含英數與 @ . _ + -，
+    這些字元在 `col=eq.value` 不會被 PostgREST 當成過濾運算子。
+    逗號／括號等「可竄改查詢語意」的字元一律剔除 → 杜絕注入
+    （例：值若含 `,is_closed.eq.false` 會被去掉逗號而失效）。
+    ⚠ 不可改回 eq."值"：本 PostgREST 不會剝掉雙引號，會把引號當值的一部分 → 比對不到
+       （2026-06-25 線上實測：加引號讀回 ❌、不加引號 ✅）。"""
+    return "eq." + re.sub(r'[^A-Za-z0-9@._+\-]', '', str(value))
 
 def _get(table, params=None):
     r = _req.get(f"{_base()}/{table}", headers=_headers(), params=params, timeout=10)
