@@ -1285,6 +1285,9 @@ def show_chat():
 
 # ── Admin: Dashboard ──────────────────────────────────────────────────────────
 def show_admin():
+    # 後台清單每 30 秒自動重抓，讓「小老師正開著後台、顧客剛問了新卦」也會浮上來。
+    # （Streamlit 預設只在互動時重跑，否則會停在切過來之前的舊清單 → 看似「找不到」。）
+    st_autorefresh(interval=30000, key="admin_dashboard_refresh")
     stats = get_stats()
 
     st.markdown("""<div class="admin-hdr">
@@ -1334,7 +1337,7 @@ def show_admin():
     )
 
     # 搜尋 + 排序
-    sa, sb, sc = st.columns([3, 2, 1])
+    sa, sb, sc, sd = st.columns([3, 2, 1, 1])
     with sa:
         search = st.text_input("🔍 搜尋姓名", value=st.session_state.admin_name_search,
                                placeholder="輸入姓名或姓氏", label_visibility="collapsed")
@@ -1346,6 +1349,9 @@ def show_admin():
                              index=sort_opts.index(sm_val) if sm_val in sort_opts else 0)
         st.session_state.admin_sort_mode = sort_mode
     with sc:
+        if st.button("🔄 重新整理", use_container_width=True):
+            st.rerun()
+    with sd:
         if st.button("🗄️ 歸檔", use_container_width=True):
             st.session_state.page = "admin_archive"
             st.rerun()
