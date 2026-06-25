@@ -877,6 +877,9 @@ with st.sidebar:
             st.markdown("**目前位置：首頁**")
 
         st.markdown("---")
+        st.markdown("""<div style="background:#2D3B2A;border:1px solid #5A7050;border-radius:8px;
+padding:7px 10px;text-align:center;color:#A0C870;font-size:0.82rem;font-weight:700;
+letter-spacing:0.05em;margin-bottom:10px;">🎁 目前為免費版</div>""", unsafe_allow_html=True)
         st.markdown("""<small>
 <b>使用說明</b><br>
 ① 用 Google 或 Email 登入<br>
@@ -1225,16 +1228,14 @@ def show_register():
             st.session_state.customer_category = cat_name
             st.session_state.page = "chat"
             send_notification(name.strip(), cat_name, question.strip(), sid)
-            st.success("問卦已送出，正在跳轉⋯⋯")
             if token:
-                # 把 token 存進這台裝置，日後回來自動帶回這筆問卦（token 猜不到，安全）
-                _components.html(f"""<script>
-localStorage.setItem('iching_token', '{token}');
-window.parent.location.href = '?token={token}';
-</script>""", height=0)
-                st.stop()
-            else:
-                st.rerun()
+                # 記 token 進這台裝置供日後自動回登；導向改走 Streamlit 原生 query param，
+                # 可靠（不再依賴 JS 跳 parent，避免「正在跳轉…」卡住、要手動點返回才動）。
+                _components.html(
+                    f"<script>localStorage.setItem('iching_token','{token}');</script>",
+                    height=0)
+                st.query_params["token"] = token
+            st.rerun()
 
 # ── Customer: Chat ────────────────────────────────────────────────────────────
 def show_chat():
