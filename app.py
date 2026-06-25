@@ -244,6 +244,13 @@ def fmt_time(ts):
     except Exception:
         return str(ts)[:16].replace("T", " ")
 
+def _plain(text: str) -> str:
+    """把顧客自填內容（問題/姓名）當純文字安全渲染：HTML 跳脫＋不解析 markdown，保留換行。
+    用法：st.markdown(_plain(x), unsafe_allow_html=True)。
+    防顧客在問題塞 markdown 圖片 ![](http://attacker) 害小老師後台外連洩 IP，或用語法弄亂版面。"""
+    return ("<div style='white-space:pre-wrap;word-break:break-word;'>"
+            + _html.escape(text or "") + "</div>")
+
 def _enrich(sessions):
     result = []
     for s in sessions:
@@ -308,6 +315,7 @@ def create_session(name: str, category: str, line_uid: str = "", email: str = ""
     失敗回 (None, None)；若 DB 欄位尚未建立則退而求其次仍送出，但 token 回空字串。"""
     sid = str(uuid.uuid4())[:8].upper()
     token = _secrets.token_urlsafe(32)
+    name = (name or "").strip()[:40]  # 伺服器端長度上限（防超大 payload；前端 max_chars 之外的防線）
     payload = {
         "session_id": sid,
         "customer_name": name,
@@ -413,6 +421,7 @@ def get_session(sid: str):
         return _DB_ERROR  # connection/timeout error
 
 def add_message(sid: str, role: str, content: str) -> bool:
+    content = (content or "")[:8000]  # 伺服器端 sanity 上限（顧客前端 1000；小老師長文也夠用）
     try:
         _post("messages", {"session_id": sid, "role": role, "content": content})
         _patch("sessions", {"updated_at": datetime.now(timezone.utc).isoformat()},
@@ -538,6 +547,46 @@ def set_setting(key: str, value: str) -> bool:
         return True
     except Exception:
         return False
+
+# ── Email 驗證碼防濫發（跨 session，存 settings 表）──────────────────────────────
+# session 冷卻只擋同一分頁重複點；攻擊者換分頁就能對受害者信箱連續寄信轟炸。
+# 這裡用伺服器端「同信箱冷卻 + 每日上限」補上。DB 異常時 fail-open（不擋正常使用者）。
+_EMAIL_COOLDOWN_S = 30   # 同一信箱兩封最少間隔（秒）
+_EMAIL_DAILY_CAP  = 15   # 同一信箱每日驗證碼上限
+
+def _email_rate_state(em: str) -> dict:
+    import json as _json
+    raw = get_setting(f"emailrate_{em}")
+    if not raw:
+        return {"last": 0.0, "count": 0, "day": 0.0}
+    try:
+        d = _json.loads(raw)
+        return {"last": float(d.get("last", 0)), "count": int(d.get("count", 0)),
+                "day": float(d.get("day", 0))}
+    except Exception:
+        return {"last": 0.0, "count": 0, "day": 0.0}
+
+def email_send_allowed(em: str):
+    """回 (是否可寄, 提示訊息)。跨 session 防濫發。"""
+    now = time.time()
+    s = _email_rate_state(em)
+    gap = now - s["last"]
+    if gap < _EMAIL_COOLDOWN_S:
+        return False, f"這個信箱剛剛已寄出驗證碼，請於 {int(_EMAIL_COOLDOWN_S - gap) + 1} 秒後再試。"
+    count = s["count"] if (now - s["day"] < 86400) else 0
+    if count >= _EMAIL_DAILY_CAP:
+        return False, "這個信箱今日的驗證碼次數已達上限，請改用上方 Google 登入，或明天再試。"
+    return True, ""
+
+def email_send_record(em: str) -> None:
+    """寄送成功後記錄，供下次 email_send_allowed 判斷。"""
+    import json as _json
+    now = time.time()
+    s = _email_rate_state(em)
+    if now - s["day"] >= 86400:
+        s["day"], s["count"] = now, 0
+    s["last"], s["count"] = now, s["count"] + 1
+    set_setting(f"emailrate_{em}", _json.dumps({"last": s["last"], "count": s["count"], "day": s["day"]}))
 
 def get_stats():
     try:
@@ -1011,10 +1060,14 @@ localStorage.removeItem('iching_email');
                     em = (em_in or "").strip().lower()
                     _now = time.time()
                     _wait = 10 - (_now - st.session_state.get("_email_last_send", 0))  # 兩封間隔至少 10 秒，擋網路延遲下的重複點擊
+                    _srv_ok, _srv_msg = (email_send_allowed(em) if _valid_email(em) else (True, ""))
                     if not _valid_email(em):
                         st.error("請輸入正確的 Email")
                     elif _wait > 0:
                         st.warning(f"剛剛已寄出，請於 {int(_wait) + 1} 秒後再重新寄送，避免重複收信。")
+                    elif not _srv_ok:
+                        # L4：跨 session 防濫發（同信箱冷卻＋每日上限），擋換分頁轟炸別人信箱
+                        st.warning(_srv_msg)
                     else:
                         code = _gen_code()
                         st.session_state["_email_code"] = code
@@ -1030,6 +1083,7 @@ localStorage.removeItem('iching_email');
                         )
                         if ok:
                             st.session_state["_email_last_send"] = _now  # 只在真的寄出後才起算冷卻；失敗可立即重試
+                            email_send_record(em)  # L4：跨 session 記錄，供同信箱冷卻＋每日上限判斷
                             st.session_state["_email_code_sent"] = True
                             st.success("驗證碼已寄出，請查看信箱（含垃圾信匣）。")
                         else:
@@ -1200,11 +1254,11 @@ def show_register():
     with st.form("register_form"):
         name = st.text_input("您的姓名",
                              value=st.session_state.line_name or st.session_state.get("name_prefill", "") or "",
-                             placeholder="請輸入姓名")
+                             placeholder="請輸入姓名", max_chars=40)
         question = st.text_area(
             "您的問題",
             placeholder="請輸入您想詢問的問題⋯⋯",
-            height=140,
+            height=140, max_chars=1000,
         )
         submitted = st.form_submit_button("提交問卦 →", use_container_width=True)
 
@@ -1297,11 +1351,11 @@ def show_chat():
     for msg in messages:
         if msg["role"] == "customer":
             with st.chat_message("user", avatar="🙏"):
-                st.markdown(msg["content"])
+                st.markdown(_plain(msg["content"]), unsafe_allow_html=True)  # 顧客內容當純文字
                 st.caption(fmt_time(msg["created_at"]))
         else:
             with st.chat_message("assistant", avatar="☯"):
-                st.markdown(f"**【小老師解卦】**\n\n{msg['content']}")
+                st.markdown(f"**【小老師解卦】**\n\n{msg['content']}")  # 小老師回覆保留 markdown
                 st.caption(fmt_time(msg["created_at"]))
 
     if sess["is_closed"]:
@@ -1328,7 +1382,7 @@ def show_chat():
         st.info("⏳ 小老師正在為您研讀卦象，請稍候⋯⋯")
         st_autorefresh(interval=20000, key="chat_autorefresh")
 
-    user_q = st.chat_input("繼續提問⋯⋯")
+    user_q = st.chat_input("繼續提問⋯⋯", max_chars=1000)
     if user_q:
         if add_message(sid, "customer", user_q):
             send_notification(sess["customer_name"] or "", sess["category"], user_q, sid, is_followup=True)
@@ -1541,7 +1595,12 @@ window.parent.sessionStorage.removeItem('iching_draft_{_draft_clear_sid}');
         for msg in messages:
             if msg["role"] == "customer":
                 with st.chat_message("user", avatar="🙏"):
-                    st.markdown(f"**{sess['customer_name'] or '（未知）'}**：{msg['content']}")
+                    # 顧客姓名＋內容都當純文字（escape），防 markdown 圖片外連/版面注入
+                    st.markdown(
+                        f"<div style='white-space:pre-wrap;word-break:break-word;'>"
+                        f"<b>{_html.escape(sess['customer_name'] or '（未知）')}</b>："
+                        f"{_html.escape(msg['content'] or '')}</div>",
+                        unsafe_allow_html=True)
                     st.caption(fmt_time(msg["created_at"]))
             else:
                 with st.chat_message("assistant", avatar="☯"):
