@@ -579,6 +579,19 @@ def close_session(sid: str) -> bool:
         st.error(f"結案失敗：{e}")
         return False
 
+def reopen_session(sid: str) -> bool:
+    """重新開啟已結案問卦：把 is_closed 翻回 false，顧客可在同一筆繼續追問。
+    bump updated_at 讓它回到後台清單最前面。"""
+    try:
+        _patch("sessions", {
+            "is_closed": False,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, {"session_id": _eqv(sid)})
+        return True
+    except Exception as e:
+        st.error(f"重新開啟失敗：{e}")
+        return False
+
 def delete_session(sid: str) -> bool:
     try:
         _delete("messages", {"session_id": _eqv(sid)})
@@ -824,6 +837,7 @@ def init_state():
         "_customer_self_closed": False, # customer clicked self-close → show custom success msg
         "_clear_reply_draft": None,     # sid whose sessionStorage draft should be wiped
         "arch_name_search": "",         # archive page search filter
+        "font_size": "標準",            # 顧客側欄字體大小（標準／大／特大），年長者放大用
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -967,6 +981,21 @@ with st.sidebar:
                     st.rerun()
     else:
         st.markdown("## ☯ 洞察易生的經歷")
+        st.markdown("---")
+
+        # 大字體：問卦客群偏年長，提供放大選項方便閱讀解卦。選擇存 session_state，
+        # CSS 在側欄注入也全域生效（<style> 不受容器限制）。選「標準」不注入＝預設大小。
+        _font = st.radio("🔍 字體大小", ["標準", "大", "特大"], horizontal=True,
+                         key="font_size", help="覺得字小可以調大，方便看小老師的解卦。")
+        _font_sz = {"大": "1.18rem", "特大": "1.42rem"}.get(_font)
+        if _font_sz:
+            st.markdown(f"""<style>
+[data-testid="stAppViewContainer"] p,
+[data-testid="stAppViewContainer"] li,
+[data-testid="stAppViewContainer"] .stMarkdown,
+[data-testid="stChatMessage"] p,
+.stButton button {{ font-size: {_font_sz} !important; line-height: 1.8 !important; }}
+</style>""", unsafe_allow_html=True)
         st.markdown("---")
 
         if st.session_state.page == "chat" and st.session_state.customer_sid:
@@ -1409,6 +1438,9 @@ def show_chat():
 
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
 
+    if st.session_state.pop("_just_reopened", False):
+        st.success("已重新開啟這則諮詢，請在下方輸入您的追問，小老師會收到通知。")
+
     messages = get_messages(sid)
     if messages is None:
         if st.button("🔄 重新整理", key="_chat_msg_retry"):
@@ -1426,7 +1458,12 @@ def show_chat():
                 st.caption(fmt_time(msg["created_at"]))
 
     if sess["is_closed"]:
-        st.info("✅ 此諮詢已由小老師結案。如需繼續問卦，請回首頁重新提問。")
+        st.info("✅ 此諮詢已由小老師結案。")
+        st.caption("還想針對這個問題追問嗎？可以重新開啟，小老師會再收到通知；不需要的話也可回首頁問全新的問題。")
+        if st.button("↻ 重新開啟、繼續問小老師", key="_reopen", use_container_width=True):
+            if reopen_session(sid):
+                st.session_state["_just_reopened"] = True  # 進到開啟狀態後給一次提示
+                st.rerun()
         return
 
     if messages and messages[-1]["role"] == "consultant":
