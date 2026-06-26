@@ -355,10 +355,17 @@ def create_session(name: str, category: str, line_uid: str = "", email: str = ""
         _post("sessions", payload)
         return sid, token
     except Exception:
-        # token / line_uid / email 欄位若尚未建立（migration 未跑），去掉選填欄位再試，確保問卦仍可送出
-        minimal = {"session_id": sid, "customer_name": name, "category": category, "preference": ""}
+        # 退路：只在「token 欄位可能尚未建立」時去掉 token 再試一次。
+        # ⚠ email／line_uid 必須保留——它們的 migration 已跑、欄位確定存在，且是顧客身分命脈：
+        #   少了 email 小老師回覆無法寄通知、少了 line_uid LINE 顧客回不來。
+        #   （舊版連 email／line_uid 也一起丟，會在 DB 短暫抖動時建出「查無身分」的孤兒問卦。）
+        fallback = {"session_id": sid, "customer_name": name, "category": category, "preference": ""}
+        if line_uid:
+            fallback["line_uid"] = line_uid
+        if email:
+            fallback["email"] = email.lower()
         try:
-            _post("sessions", minimal)
+            _post("sessions", fallback)
             return sid, ""  # 無 token：本次仍可問卦，只是這台裝置日後無法用 token 自動回登
         except Exception as e:
             st.error(f"建立諮詢失敗：{e}")
