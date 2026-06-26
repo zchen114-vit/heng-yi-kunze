@@ -204,13 +204,15 @@ def _base():
 
 def _eqv(value: str) -> str:
     """安全的 PostgREST eq 過濾值（白名單清洗，不加雙引號）。
-    合法業務值（session_id／token／email／line_uid）只含英數與 @ . _ + -，
-    這些字元在 `col=eq.value` 不會被 PostgREST 當成過濾運算子。
+    合法業務值（session_id／token／email／line_uid）只含英數與 @ . _ % + -，
+    這些字元在 `col=eq.value` 不會被 PostgREST 當成過濾運算子（% 在 eq 為字面量）。
     逗號／括號等「可竄改查詢語意」的字元一律剔除 → 杜絕注入
     （例：值若含 `,is_closed.eq.false` 會被去掉逗號而失效）。
+    ⚠ 白名單須與 _valid_email 允許的字元集一致（含 %），否則含 % 的 email
+       會被剝字元 → 單筆查／防濫發 key 對不到（同 2026-06-25 雙引號雷的變體）。
     ⚠ 不可改回 eq."值"：本 PostgREST 不會剝掉雙引號，會把引號當值的一部分 → 比對不到
        （2026-06-25 線上實測：加引號讀回 ❌、不加引號 ✅）。"""
-    return "eq." + re.sub(r'[^A-Za-z0-9@._+\-]', '', str(value))
+    return "eq." + re.sub(r'[^A-Za-z0-9@._%+\-]', '', str(value))
 
 def _get(table, params=None):
     r = _req.get(f"{_base()}/{table}", headers=_headers(), params=params, timeout=10)
