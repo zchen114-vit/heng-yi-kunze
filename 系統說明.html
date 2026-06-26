@@ -283,7 +283,9 @@ flowchart TD
     <li><span class="pill ok">已完成</span> <strong>「找不到此諮詢記錄」雙修</strong>：① <code>supabase_key</code> 換 secret／service_role（繞 RLS）② <code>_eqv()</code> 改白名單清洗、不加引號（單筆等值查詢才撈得到，commit <code>27ab225</code>）。兩者缺一不可。</li>
     <li><span class="pill ok">已完成</span> Supabase token 欄 migration、Google 登入、後台自動刷新、<code>?debug=1</code> DB 自我測試。</li>
     <li><span class="pill ok">已完成</span> <strong>2026-06-26 資安強化（4 修）</strong>：① <code>_eqv</code> 白名單補 <code>%</code>（含 % 的 email 單筆查得到）② <code>?debug=1</code> 診斷收斂為「僅後台 admin」可見（原本任何人加參數就洩 session 筆數＋寫刪探針）③ 後台改 Google 信箱白名單、拔掉可暴力破解的密碼 ④ <code>create_session</code> 退路保留 email／line_uid，不再建「查無身分」的孤兒問卦。</li>
-    <li><span class="pill ok">設計如此</span> <strong>問卦數量＝不設上限</strong>：一個顧客想問幾筆就幾筆、同主題也可問多筆，<strong>不會被擋</strong>（唯一節流是「同 email 寄驗證碼有 10 秒間隔＋每日上限」，那是防濫發信、非防問卦）。⚠ 但 app 介面的「進行中諮詢」橫幅＋裝置自動回登只會帶回<strong>最新 1 筆</strong>未結案；較舊的未結案要靠小老師回覆 email 裡的 <code>?token=</code> 連結回去（每筆各自一把 token）。若要讓顧客在站內直接挑任一筆回去，需再加「我的進行中諮詢清單」（尚未做）。</li>
+    <li><span class="pill ok">設計如此</span> <strong>問卦數量＝不設上限</strong>：一個顧客想問幾筆就幾筆、同主題也可問多筆，<strong>不會被擋</strong>（唯一節流是「同 email 寄驗證碼有 10 秒間隔＋每日上限」，那是防濫發信、非防問卦）。</li>
+    <li><span class="pill ok">已完成</span> <strong>首頁「我的進行中諮詢」清單</strong>：列出登入身分所有未結案問卦（分區＋問題預覽＋待回覆/已回覆），點任一筆進該對話，取代舊的「只浮最新 1 筆」。<code>get_my_open_sessions()</code>。</li>
+    <li><span class="pill ok">已完成</span> <strong>首頁「我的歷史紀錄」</strong>：已結案問卦唯讀回顧（結案會清 localStorage，這是顧客回看舊解卦的唯一入口）。重用 <code>show_chat</code> 結案分支，<code>get_my_closed_sessions()</code>，最多 20 筆。</li>
     <li><span class="pill todo">待驗收</span> 無痕跑完整一輪：① email 登入 ② 問卦進得到聊天室、看到自己的問題 ③ 後台看得到、點得進、回得了 ④ 顧客收到回覆通知 email ⑤ 關分頁再開用 token 自動回登。</li>
   </ul>
   <div class="note">這份是「人看的對照手冊」；Claude 端的速記在記憶庫 <code>project_grr_bugfix_progress.md</code>，兩者分工，不重複。改規格或出新問題時，先翻對應區塊。</div>
