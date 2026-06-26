@@ -26,7 +26,6 @@ st.set_page_config(
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-_FALLBACK_PW = st.secrets.get("admin_password", "")  # 不再硬編碼預設密碼（原 kunze2024 寫在公開原始碼=任何人可登入後台）
 _LIFF_ID = st.secrets.get("liff_id", "")  # LINE LIFF App ID; 空字串時整段 LIFF 功能停用
 _APP_URL = st.secrets.get("app_url", "https://iching-insight.streamlit.app").rstrip("/")
 def _email_enabled() -> bool:
@@ -50,6 +49,15 @@ def _valid_email(s: str) -> bool:
     """嚴格驗證 email：擋掉引號/空白/角括號等可被注入 JS 字串或 HTML 的字元。
     email 之後會被插進 localStorage JS 字面量與通知信連結，必須先在源頭把關。"""
     return bool(_EMAIL_RE.match((s or "").strip()))
+
+def _admin_emails() -> set:
+    """管理員白名單（Secrets `admin_emails`，逗號分隔）。後台改用 Google 登入身分授權，
+    不再有可暴力破解的共用密碼。逐一小寫正規化，比對時才不會因大小寫漏判。"""
+    raw = st.secrets.get("admin_emails", "")
+    return {e.strip().lower() for e in str(raw).split(",") if e.strip()}
+
+def _is_admin_email(email: str) -> bool:
+    return (email or "").strip().lower() in _admin_emails()
 
 CATEGORIES = {
     "感情與人際": {
@@ -505,33 +513,6 @@ def delete_session(sid: str) -> bool:
         st.error(f"刪除失敗：{e}")
         return False
 
-def get_admin_password():
-    """回傳目前管理密碼。DB 連線異常時回 None（fail-closed），呼叫端須拒絕登入，
-    避免攻擊者短暫干擾 DB 就讓密碼關卡降回硬編碼預設值。沒有 config 列（首次啟用）才用預設。"""
-    try:
-        data = _get("config", {"key": "eq.admin_password", "limit": "1"})
-    except Exception:
-        return None  # DB 錯誤 → fail-closed，不可登入
-    return data[0]["value"] if data else _FALLBACK_PW
-
-def set_admin_password(new_pw: str) -> bool:
-    try:
-        _post("config", {"key": "admin_password", "value": new_pw},
-              {"Prefer": "resolution=merge-duplicates,return=representation"})
-        return True
-    except Exception as e:
-        st.error(f"無法更新密碼：{e}")
-        return False
-
-# 管理入口防暴力破解：固定延遲（換分頁/重開 session 也省不掉，這是 session-reset-proof 的核心）
-# + 算術驗證碼（擋掉最廉價的腳本）。session-based 的 5 次鎖只是 in-session 加碼，非主要防線。
-_ADMIN_ATTEMPT_DELAY = 1.2  # 每次嘗試付出的伺服器端延遲（秒）；拖慢暴力破解、對真人登入幾乎無感
-
-def _new_admin_captcha():
-    """產生新的加法驗證碼（用 secrets 不可預測），存入 session_state 供下次驗證。"""
-    st.session_state["_admin_cap_a"] = _secrets.randbelow(9) + 1
-    st.session_state["_admin_cap_b"] = _secrets.randbelow(9) + 1
-
 def get_announcement() -> str:
     try:
         data = _get("settings", {"key": "eq.announcement", "select": "value", "limit": "1"})
@@ -837,29 +818,12 @@ with st.sidebar:
             for _k in list(st.session_state.keys()):
                 if _k.startswith("_del_arch_confirm_"):
                     st.session_state.pop(_k, None)
-            st.session_state.pop("admin_pw", None)
             st.session_state.admin_mode = False
             st.session_state.page = "home"
             st.rerun()
         st.markdown("---")
-        with st.expander("🔑 更改管理密碼"):
-            old_pw  = st.text_input("目前密碼", type="password", key="chpw_old")
-            new_pw  = st.text_input("新密碼",   type="password", key="chpw_new")
-            new_pw2 = st.text_input("確認新密碼", type="password", key="chpw_new2")
-            if st.button("確認更改", use_container_width=True, key="chpw_btn"):
-                if not old_pw or not new_pw or not new_pw2:
-                    st.error("請填寫所有欄位")
-                elif len(new_pw) < 6:
-                    st.error("新密碼至少 6 個字元")
-                elif new_pw != new_pw2:
-                    st.error("兩次新密碼不一致")
-                elif (_cur_pw := get_admin_password()) is None:
-                    st.error("⚠️ 資料庫暫時無法連線，請稍後再試。")
-                elif not hmac.compare_digest(old_pw.encode("utf-8"), _cur_pw.encode("utf-8")):
-                    st.error("目前密碼錯誤")
-                else:
-                    if set_admin_password(new_pw):
-                        st.success("密碼已更新")
+        # 「更改管理密碼」已移除：後台改用 Google 信箱白名單授權，無共用密碼可改。
+        # 要增減管理員 → 改 Secrets 的 admin_emails。
 
         with st.expander("📢 跑馬燈公告"):
             _cur_ann = get_announcement()
@@ -964,45 +928,26 @@ letter-spacing:0.05em;margin-bottom:10px;">🎁 目前為免費版</div>""", uns
 
         st.markdown("---")
         with st.expander("🔐 管理入口"):
-            pw = st.text_input("管理密碼", type="password", key="admin_pw")
-            # 驗證碼題目穩定到下次提交才換（避免使用者打字時題目一直變）
-            if "_admin_cap_a" not in st.session_state:
-                _new_admin_captcha()
-            _ca = st.session_state["_admin_cap_a"]
-            _cb = st.session_state["_admin_cap_b"]
-            cap = st.text_input(f"驗證碼：{_ca} + {_cb} = ?", key="admin_cap_in")
-            if st.button("進入管理後台", use_container_width=True):
-                # 固定延遲：每次嘗試都付出，換分頁/重開 session 也省不掉 → session-reset 無法加速暴力破解。
-                time.sleep(_ADMIN_ATTEMPT_DELAY)
-                _lock_until = st.session_state.get("_admin_lock_until", 0)
-                if time.time() < _lock_until:
-                    st.error(f"嘗試過多，請於 {int(_lock_until - time.time()) + 1} 秒後再試。")
-                elif str(cap).strip() != str(_ca + _cb):
-                    _new_admin_captcha()  # 換新題，防腳本重放已解出的驗證碼
-                    st.error("驗證碼錯誤，請重新輸入。")
-                else:
-                    _cur_pw = get_admin_password()
-                    if _cur_pw is None:
-                        st.error("⚠️ 資料庫暫時無法連線，請稍後再試。")
-                    elif not _cur_pw:
-                        st.error("尚未設定管理密碼，請於 Secrets 設定 admin_password。")
-                    elif pw and hmac.compare_digest(pw.encode("utf-8"), _cur_pw.encode("utf-8")):
-                        st.session_state["_admin_fail"] = 0
-                        _new_admin_captcha()  # 登入成功也換題，避免下次沿用舊題
-                        st.session_state.admin_mode = True
-                        st.session_state.page = "admin"
-                        st.rerun()
-                    else:
-                        # 固定延遲是主防線；session 級 5 次鎖只是 in-session 加碼（換分頁可繞，故非唯一防線）
-                        _fail = st.session_state.get("_admin_fail", 0) + 1
-                        st.session_state["_admin_fail"] = _fail
-                        _new_admin_captcha()  # 每次密碼錯也換題，逼腳本重解
-                        if _fail >= 5:
-                            st.session_state["_admin_lock_until"] = time.time() + 60
-                            st.session_state["_admin_fail"] = 0
-                            st.error("錯誤次數過多，已暫時鎖定 60 秒。")
-                        else:
-                            st.error(f"密碼錯誤（剩 {5 - _fail} 次）")
+            # 後台授權＝Google 登入身分白名單，不再有可暴力破解的共用密碼。
+            # 攻擊面消失：沒有密碼可猜；MFA／帳號安全／登入限流全交給 Google。
+            _admin_set = _admin_emails()
+            if not _admin_set:
+                st.caption("⚠️ 尚未設定管理員白名單（Secrets `admin_emails`，逗號分隔）。")
+            elif not _google_enabled():
+                st.caption("管理入口需啟用 Google 登入（Secrets 設定 [auth] 區塊）。")
+            elif not getattr(st.user, "is_logged_in", False):
+                st.caption("請先以管理員 Google 帳號登入。")
+                st.button("使用 Google 登入", on_click=st.login,
+                          use_container_width=True, key="admin_g_login")
+            elif _is_admin_email(getattr(st.user, "email", "")):
+                st.success(f"已驗證管理員：{st.user.email}")
+                if st.button("進入管理後台", use_container_width=True):
+                    st.session_state.admin_mode = True
+                    st.session_state.page = "admin"
+                    st.rerun()
+            else:
+                # 已登入但不在白名單 → 不洩漏細節，僅告知無權限。
+                st.caption("此帳號無管理權限。")
 
 # ── Customer: Home ────────────────────────────────────────────────────────────
 def show_home():
