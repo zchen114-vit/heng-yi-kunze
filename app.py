@@ -312,6 +312,20 @@ def _db_selftest():
         out.append(f"寫入往返失敗={type(e).__name__}:{str(e)[:90]}")
     return " · ".join(out)
 
+def _render_debug_panel():
+    """診斷面板（LIFF／Google／DB 自我測試）。⚠ 僅限 admin：_db_selftest 會洩漏 sessions 筆數
+    且每次都對 DB 做寫入+刪除探針，故只在管理後台 + ?debug=1 時呼叫，不可放在顧客可見頁面。"""
+    st.caption(
+        f"🔧 LIFF 診斷 — liff_id: {'✓ 已設定（LIFF 啟用）' if _LIFF_ID else '✗ 缺（LIFF 停用）'}、"
+        f"目前 line_uid: {st.session_state.line_uid or '（無 — 非 LINE 內開啟或尚未自動登入）'}。"
+    )
+    st.caption(
+        f"🔧 Google 診斷 — [auth] 區塊: {'✓ 已讀到（按鈕應顯示）' if _google_enabled() else '✗ 沒讀到（Secrets 沒有 [auth]／格式錯／app 還沒重啟）'}、"
+        f"redirect_uri: {st.secrets.get('auth', {}).get('redirect_uri', '（未設定）') if _google_enabled() else '—'}、"
+        f"目前登入: {('✅ '+(getattr(st.user, 'email', '') or '')) if (_google_enabled() and getattr(st.user, 'is_logged_in', False)) else '未登入'}。"
+    )
+    st.caption("🔧 DB 自我測試 — " + _db_selftest())
+
 def create_session(name: str, category: str, line_uid: str = "", email: str = ""):
     """建立問卦，回傳 (session_id, token)。token 是猜不到的隨機字串，是日後回來查看的唯一鑰匙。
     失敗回 (None, None)；若 DB 欄位尚未建立則退而求其次仍送出，但 token 回空字串。"""
@@ -1132,19 +1146,8 @@ localStorage.removeItem('iching_email');
             f"gmail_app_password: {'✓' if _have_pw else '✗ 缺'}。兩個都要填好才會出現登入框。"
         )
 
-    # LIFF 診斷（驗收用）：網址加 ?debug=1 才顯示，顧客平常看不到。
-    # liff_id ✓ = 線上 Secrets 已吃到、LIFF 已啟用；在 LINE 內開啟若 line_uid 有值 = 免密碼自動登入成功。
-    if st.query_params.get("debug") == "1":
-        st.caption(
-            f"🔧 LIFF 診斷 — liff_id: {'✓ 已設定（LIFF 啟用）' if _LIFF_ID else '✗ 缺（LIFF 停用）'}、"
-            f"目前 line_uid: {st.session_state.line_uid or '（無 — 非 LINE 內開啟或尚未自動登入）'}。"
-        )
-        st.caption(
-            f"🔧 Google 診斷 — [auth] 區塊: {'✓ 已讀到（按鈕應顯示）' if _google_enabled() else '✗ 沒讀到（Secrets 沒有 [auth]／格式錯／app 還沒重啟）'}、"
-            f"redirect_uri: {st.secrets.get('auth', {}).get('redirect_uri', '（未設定）') if _google_enabled() else '—'}、"
-            f"目前登入: {('✅ '+(getattr(st.user, 'email', '') or '')) if (_google_enabled() and getattr(st.user, 'is_logged_in', False)) else '未登入'}。"
-        )
-        st.caption("🔧 DB 自我測試 — " + _db_selftest())
+    # ⚠ 診斷面板（含 _db_selftest 寫刪探針＋sessions 筆數）已移至管理後台，僅 admin + ?debug=1 可見。
+    #   原本放在顧客首頁，任何人加 ?debug=1 即可觸發未授權洩漏，故移除（2026-06-26 #2 修正）。
 
     # 進行中諮詢橫幅：已登入／持 token 且有未結案問卦時，停在首頁讓顧客「自己選」回去看回覆，
     # 取代舊的「自動跳進對話」（會把顧客困在對話、到不了首頁、也不能問新問題）。
@@ -1418,6 +1421,11 @@ def show_admin():
 <div class="stat-num">{icon} {val}</div>
 <div class="stat-label">{label}</div>
 </div>""", unsafe_allow_html=True)
+
+    # 診斷面板：僅後台 + 網址加 ?debug=1 才顯示（含 DB 寫刪探針，不可外露給顧客）。
+    if st.query_params.get("debug") == "1":
+        with st.expander("🔧 系統診斷（LIFF／Google／DB 自我測試）", expanded=True):
+            _render_debug_panel()
 
     st.markdown('<hr class="g-div">', unsafe_allow_html=True)
 
