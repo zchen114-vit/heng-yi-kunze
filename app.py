@@ -42,6 +42,18 @@ def _google_enabled() -> bool:
     except Exception:
         return False
 
+def _in_app_browser() -> bool:
+    """偵測顧客是否在 App 內嵌瀏覽器（LINE／IG／FB／Messenger 等 WebView）開啟。
+    這些 WebView 會被 Google OAuth 以 `disallowed_useragent`（403）擋下 → 無法用 Google 登入，
+    需改用真瀏覽器或 Email 登入。偵測失敗保守回 False（不打擾一般瀏覽器、AppTest 也安全）。"""
+    try:
+        ua = st.context.headers.get("User-Agent", "") or ""
+    except Exception:
+        return False
+    markers = ("Line/", "FBAN", "FBAV", "FB_IAB", "Instagram",
+               "Messenger", "MicroMessenger", "; wv)")
+    return any(m in ua for m in markers)
+
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 def _valid_email(s: str) -> bool:
@@ -1227,6 +1239,11 @@ localStorage.removeItem('iching_email');
 </div>""", unsafe_allow_html=True)
 
     if _google_enabled():
+        if not getattr(st.user, "is_logged_in", False) and _in_app_browser():
+            # LINE/IG 等 App 內嵌瀏覽器會被 Google 以 403 disallowed_useragent 擋下，
+            # 先提示顧客改用真瀏覽器或下方 Email 登入，免得撞牆。
+            st.warning("⚠️ 偵測到您在 LINE／IG 等 App 內開啟，**Google 登入會被 Google 擋下（403）**。"
+                       "請點右上角「⋯」選「用瀏覽器開啟」，或直接改用下方的 📧 Email 登入。")
         if getattr(st.user, "is_logged_in", False):
             gem = (getattr(st.user, "email", "") or "").strip().lower()
             if gem and _valid_email(gem):
